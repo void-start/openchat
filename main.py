@@ -107,3 +107,11 @@ def reset():
     cur.execute("DELETE FROM messages")
     conn.commit()
     return {"status": "ok"}
+
+from fastapi.responses import RedirectResponse
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/static/index.html")
+
+
