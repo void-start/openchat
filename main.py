@@ -1,76 +1,93 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List
 import sqlite3
 import uuid
+from datetime import datetime
 
+# ----------------- APP -----------------
 app = FastAPI()
 
-# Разрешаем запросы с фронтенда (GitHub Pages / Render)
+# Разрешаем CORS (для фронтенда)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # можно ограничить позже
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- БД ---
-def init_db():
-    conn = sqlite3.connect("chat.db")
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        display_name TEXT
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sender TEXT,
-        recipient TEXT,
-        text TEXT
-    )""")
-    conn.commit()
-    conn.close()
+# Раздаём статику (фронтенд)
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
-init_db()
+# ----------------- БД -----------------
+conn = sqlite3.connect("chat.db", check_same_thread=False)
+cur = conn.cursor()
 
-# --- Модели ---
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    display_name TEXT,
+    created_at TEXT
+)
+""")
+cur.execute("""
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    sender TEXT,
+    recipient TEXT,
+    text TEXT,
+    created_at TEXT
+)
+""")
+conn.commit()
+
+# ----------------- MODELS -----------------
 class RegisterRequest(BaseModel):
+    display_name: str | None = None
+
+class SetNameRequest(BaseModel):
+    user_id: str
     display_name: str
 
-class MessageRequest(BaseModel):
+class MessageIn(BaseModel):
     sender: str
     recipient: str
     text: str
 
-# --- API ---
+# ----------------- API -----------------
 @app.post("/register")
 def register(req: RegisterRequest):
     user_id = str(uuid.uuid4())
-    conn = sqlite3.connect("chat.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", (user_id, req.display_name))
+    now = datetime.utcnow().isoformat()
+    cur.execute("INSERT INTO users (id, display_name, created_at) VALUES (?, ?, ?)",
+                (user_id, req.display_name, now))
     conn.commit()
-    conn.close()
-    return {"user_id": user_id}
+    return {"user_id": user_id, "display_name": req.display_name}
+
+@app.post("/set_name")
+def set_name(req: SetNameRequest):
+    cur.execute("UPDATE users SET display_name=? WHERE id=?", (req.display_name, req.user_id))
+    conn.commit()
+    return {"status": "ok"}
+
+@app.get("/users")
+def list_users():
+    cur.execute("SELECT id, display_name FROM users")
+    rows = cur.fetchall()
+    return [{"id": r[0], "display_name": r[1]} for r in rows]
 
 @app.post("/send")
-def send(req: MessageRequest):
-    conn = sqlite3.connect("chat.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text) VALUES (?, ?, ?)",
-              (req.sender, req.recipient, req.text))
+def send(msg: MessageIn):
+    msg_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    cur.execute("INSERT INTO messages (id, sender, recipient, text, created_at) VALUES (?, ?, ?, ?, ?)",
+                (msg_id, msg.sender, msg.recipient, msg.text, now))
     conn.commit()
-    conn.close()
     return {"status": "ok"}
 
 @app.get("/inbox/{user_id}")
 def inbox(user_id: str):
-    conn = sqlite3.connect("chat.db")
-    c = conn.cursor()
-    c.execute("SELECT sender, recipient, text FROM messages WHERE recipient=? OR sender=?",
-              (user_id, user_id))
-    msgs = [{"sender": s, "recipient": r, "text": t} for s, r, t in c.fetchall()]
-    conn.close()
-    return msgs
+    cur.execute("SELECT sender, text, created_at FROM messages WHERE recipient=? ORDER BY created_at ASC", (user_id,))
+    rows = cur.fetchall()
+    return [{"sender": r[0], "text": r[1], "created_at": r[2]} for r in rows]
