@@ -10,9 +10,14 @@ body {
     background: black;
     color: #0f0;
 }
+#header {
+    padding: 10px;
+    border-bottom: 1px solid #0f0;
+    background: #010;
+}
 #container {
     display: flex;
-    height: 100vh;
+    height: calc(100vh - 40px);
 }
 #users {
     width: 250px;
@@ -68,6 +73,10 @@ body {
 </head>
 <body>
 
+<div id="header">
+    Your ID: <span id="myId">loading...</span>
+</div>
+
 <div id="container">
     <div id="users">
         <div id="addContactBtn">+ Add Contact</div>
@@ -82,7 +91,7 @@ body {
 </div>
 
 <script>
-const SERVER = window.location.origin;  // Автоматически берём адрес (Render URL)
+const SERVER = window.location.origin;  
 let userId = localStorage.getItem("userId");
 let displayName = localStorage.getItem("displayName");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
@@ -90,8 +99,7 @@ let selectedUser = null;
 
 // -------- Регистрация --------
 async function registerUser() {
-    displayName = prompt("Enter your nickname:");
-    if(!displayName) displayName="Anon";
+    displayName = prompt("Enter your nickname:") || "Anon";
     const resp = await fetch(SERVER+"/register", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
@@ -107,8 +115,17 @@ async function registerUser() {
 async function addContact() {
     const newId = prompt("Enter the ID of the user you want to chat with:");
     if(!newId) return;
+
+    // Проверка — существует ли такой пользователь
+    const resp = await fetch(SERVER+"/user/"+newId);
+    const data = await resp.json();
+    if(data.error){
+        alert("User not found!");
+        return;
+    }
+
     if(!contacts.find(c => c.id===newId)){
-        const newUser = {id:newId, display_name:newId.substring(0,8)};
+        const newUser = {id:data.id, display_name:data.display_name || data.id.substring(0,8)};
         contacts.push(newUser);
         localStorage.setItem("contacts", JSON.stringify(contacts));
     }
@@ -170,6 +187,7 @@ setInterval(loadMessages,1500);
 
 (async function(){
     if(!userId) await registerUser();
+    document.getElementById("myId").textContent = userId;
     if(contacts.length===0) await addContact();
     renderContacts();
 })();
