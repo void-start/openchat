@@ -4,77 +4,26 @@
 <meta charset="UTF-8">
 <title>HackerChat Web</title>
 <style>
-body {
-    margin: 0;
-    font-family: monospace;
-    background: black;
-    color: #0f0;
-}
-#header {
-    padding: 10px;
-    border-bottom: 1px solid #0f0;
-    background: #010;
-}
-#container {
-    display: flex;
-    height: calc(100vh - 40px);
-}
-#users {
-    width: 250px;
-    background: #010;
-    overflow-y: auto;
-    border-right: 1px solid #0f0;
-    padding: 5px;
-}
-#chat {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-#messages {
-    flex: 1;
-    padding: 10px;
-    overflow-y: auto;
-}
-#inputForm {
-    display: flex;
-    border-top: 1px solid #0f0;
-}
-#inputForm input {
-    flex: 1;
-    background: black;
-    color: #0f0;
-    border: none;
-    padding: 10px;
-    font-family: monospace;
-}
-#inputForm button {
-    background: #0f0;
-    color: black;
-    border: none;
-    padding: 10px 15px;
-    cursor: pointer;
-}
-.user-item {
-    padding: 5px;
-    cursor: pointer;
-}
-.user-item:hover { background: #020; }
-.user-item.active { background: #050; }
-#addContactBtn {
-    margin: 5px;
-    padding: 5px;
-    background: #0f0;
-    color: black;
-    cursor: pointer;
-    text-align: center;
-}
+body { margin:0; font-family:monospace; background:black; color:#0f0;}
+#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between;}
+#container { display:flex; height:calc(100vh - 40px);}
+#users { width:250px; background:#010; overflow-y:auto; border-right:1px solid #0f0; padding:5px;}
+#chat { flex:1; display:flex; flex-direction:column;}
+#messages { flex:1; padding:10px; overflow-y:auto;}
+#inputForm { display:flex; border-top:1px solid #0f0;}
+#inputForm input { flex:1; background:black; color:#0f0; border:none; padding:10px;}
+#inputForm button { background:#0f0; color:black; border:none; padding:10px 15px; cursor:pointer;}
+.user-item { padding:5px; cursor:pointer;}
+.user-item:hover { background:#020; }
+.user-item.active { background:#050; }
+#addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
 </style>
 </head>
 <body>
 
 <div id="header">
-    Your ID: <span id="myId">loading...</span>
+    <span>Your ID: <span id="myId">loading...</span></span>
+    <button id="resetBtn">Reset DB</button>
 </div>
 
 <div id="container">
@@ -91,7 +40,7 @@ body {
 </div>
 
 <script>
-const SERVER = window.location.origin;  
+const SERVER = window.location.origin;
 let userId = localStorage.getItem("userId");
 let displayName = localStorage.getItem("displayName");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
@@ -115,15 +64,9 @@ async function registerUser() {
 async function addContact() {
     const newId = prompt("Enter the ID of the user you want to chat with:");
     if(!newId) return;
-
-    // Проверка — существует ли такой пользователь
     const resp = await fetch(SERVER+"/user/"+newId);
     const data = await resp.json();
-    if(data.error){
-        alert("User not found!");
-        return;
-    }
-
+    if(data.error){ alert("User not found!"); return; }
     if(!contacts.find(c => c.id===newId)){
         const newUser = {id:data.id, display_name:data.display_name || data.id.substring(0,8)};
         contacts.push(newUser);
@@ -158,9 +101,9 @@ async function loadMessages(){
     const chatDiv = document.getElementById("messages");
     chatDiv.innerHTML = "";
     msgs.forEach(m=>{
-        if(m.sender === selectedUser.id || m.sender===userId){
+        if((m.sender===selectedUser.id && m.recipient===userId) || (m.sender===userId && m.recipient===selectedUser.id)){
             const div = document.createElement("div");
-            div.textContent = (m.sender===userId?"Me":selectedUser.display_name) + ": " + m.text;
+            div.textContent = (m.sender===userId?"Me":selectedUser.display_name)+": "+m.text;
             chatDiv.appendChild(div);
         }
     });
@@ -180,6 +123,15 @@ document.getElementById("inputForm").onsubmit = async function(e){
     });
     document.getElementById("messageInput").value="";
     loadMessages();
+}
+
+// -------- Сброс базы --------
+document.getElementById("resetBtn").onclick = async function(){
+    const pwd = prompt("Enter reset password:");
+    if(!pwd) return;
+    const resp = await fetch(`${SERVER}/reset?password=${pwd}`, {method:"POST"});
+    const data = await resp.json();
+    alert(JSON.stringify(data));
 }
 
 // -------- Автообновление --------
