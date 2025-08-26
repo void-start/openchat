@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 import sqlite3
 import uuid
@@ -19,6 +20,11 @@ app.add_middleware(
 
 # Статика на /static
 app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+
+# Корень → редирект на фронтенд
+@app.get("/")
+def root():
+    return RedirectResponse(url="/static/index.html")
 
 # ----------------- БД -----------------
 conn = sqlite3.connect("chat.db", check_same_thread=False)
@@ -88,9 +94,13 @@ def send(msg: MessageIn):
 
 @app.get("/inbox/{user_id}")
 def inbox(user_id: str):
-    cur.execute("SELECT sender, text, created_at FROM messages WHERE recipient=? ORDER BY created_at ASC", (user_id,))
+    cur.execute("SELECT sender, recipient, text, created_at FROM messages ORDER BY created_at ASC")
     rows = cur.fetchall()
-    return [{"sender": r[0], "text": r[1], "created_at": r[2]} for r in rows]
+    # возвращаем только сообщения между user_id и любым его контактом
+    return [
+        {"sender": r[0], "recipient": r[1], "text": r[2], "created_at": r[3]}
+        for r in rows if r[0]==user_id or r[1]==user_id
+    ]
 
 @app.get("/user/{user_id}")
 def get_user(user_id: str):
@@ -100,18 +110,14 @@ def get_user(user_id: str):
         return {"id": row[0], "display_name": row[1]}
     return {"error": "not found"}
 
-# ----------------- Для разработки: сброс базы -----------------
+# ----------------- RESET с паролем -----------------
+RESET_PASSWORD = "12345"  # поменяй на свой пароль
+
 @app.post("/reset")
-def reset():
+def reset(password: str):
+    if password != RESET_PASSWORD:
+        return {"error": "wrong password"}
     cur.execute("DELETE FROM users")
     cur.execute("DELETE FROM messages")
     conn.commit()
     return {"status": "ok"}
-
-from fastapi.responses import RedirectResponse
-
-@app.get("/")
-def root():
-    return RedirectResponse(url="/static/index.html")
-
-
