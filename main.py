@@ -91,3 +91,13 @@ def inbox(user_id: str):
     cur.execute("SELECT sender, text, created_at FROM messages WHERE recipient=? ORDER BY created_at ASC", (user_id,))
     rows = cur.fetchall()
     return [{"sender": r[0], "text": r[1], "created_at": r[2]} for r in rows]
+
+@app.get("/user/{user_id}")
+def get_user(user_id: str):
+    cur.execute("SELECT id, display_name FROM users WHERE id=?", (user_id,))
+    row = cur.fetchone()
+    if row:
+        return {"id": row[0], "display_name": row[1]}
+    return {"error": "not found"}
+
+
