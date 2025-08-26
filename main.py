@@ -9,7 +9,7 @@ from datetime import datetime
 # ----------------- APP -----------------
 app = FastAPI()
 
-# Разрешаем CORS (для фронтенда)
+# Разрешаем CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,8 +17,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Раздаём статику (фронтенд)
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Статика на /static
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")
 
 # ----------------- БД -----------------
 conn = sqlite3.connect("chat.db", check_same_thread=False)
@@ -100,7 +100,10 @@ def get_user(user_id: str):
         return {"id": row[0], "display_name": row[1]}
     return {"error": "not found"}
 
-
-
-
-
+# ----------------- Для разработки: сброс базы -----------------
+@app.post("/reset")
+def reset():
+    cur.execute("DELETE FROM users")
+    cur.execute("DELETE FROM messages")
+    conn.commit()
+    return {"status": "ok"}
