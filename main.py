@@ -100,12 +100,7 @@ def get_user(user_id: str):
         return {"id": row[0], "display_name": row[1]}
     return {"error": "not found"}
 
-@app.post("/reset")
-def reset():
-    cur.execute("DELETE FROM users")
-    cur.execute("DELETE FROM messages")
-    conn.commit()
-    return {"status": "ok"}
+
 
 
 
