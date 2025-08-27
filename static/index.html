@@ -146,6 +146,15 @@ document.getElementById("loginBtn").onclick = loginOrRegister;
 setInterval(loadMessages,2000);
 
 (async function(){
+    if(userId){
+        // проверяем существование на сервере
+        const resp = await fetch(`${SERVER}/user/${userId}`);
+        if(resp.status === 404){
+            localStorage.removeItem("userId");
+            localStorage.removeItem("displayName");
+            userId = null;
+        }
+    }
     if(!userId) await loginOrRegister();
     document.getElementById("myId").textContent = userId;
     renderContacts();
