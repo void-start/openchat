@@ -1,124 +1,105 @@
 import os
-import sqlite3
 import uuid
-from fastapi import FastAPI, Form, UploadFile, File, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# ----------- База данных ----------
-if not os.path.exists("data"):
-    os.makedirs("data")
+# Разрешаем фронтенд подключаться
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-DB_FILE = "data/chat.db"
+# === ХРАНИЛКИ ДАННЫХ ===
+users = {}         # {username: {"password": str, "id": str}}
+connections = {}   # {user_id: websocket} для чата
+rtc_connections = {}  # {user_id: websocket} для WebRTC
+messages = {}      # {user_id: [ {from, text/file} ]}
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        password TEXT
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        sender TEXT,
-        receiver TEXT,
-        type TEXT,
-        content TEXT
-    )""")
-    conn.commit()
-    conn.close()
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-init_db()
-
-# ----------- Авторизация ----------
+# === АУТЕНТИФИКАЦИЯ ===
 @app.post("/register")
-def register(username: str = Form(...), password: str = Form(...)):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        uid = str(uuid.uuid4())
-        c.execute("INSERT INTO users VALUES (?, ?, ?)", (uid, username, password))
-        conn.commit()
-        return {"status": "ok", "user_id": uid}
-    except sqlite3.IntegrityError:
-        return {"status": "error", "msg": "Username taken"}
-    finally:
-        conn.close()
+async def register(username: str = Form(...), password: str = Form(...)):
+    if username in users:
+        return {"error": "User already exists"}
+    user_id = str(uuid.uuid4())
+    users[username] = {"password": password, "id": user_id}
+    messages[user_id] = []
+    return {"id": user_id, "username": username}
 
 @app.post("/login")
-def login(username: str = Form(...), password: str = Form(...)):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE username=? AND password=?", (username, password))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return {"status": "ok", "user_id": row[0]}
-    return {"status": "error", "msg": "Invalid credentials"}
+async def login(username: str = Form(...), password: str = Form(...)):
+    if username not in users:
+        return {"error": "User not found"}
+    if users[username]["password"] != password:
+        return {"error": "Wrong password"}
+    return {"id": users[username]["id"], "username": username}
 
-# ----------- Сообщения ----------
-@app.post("/send_message")
-def send_message(sender: str = Form(...), receiver: str = Form(...), content: str = Form(...)):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    mid = str(uuid.uuid4())
-    c.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", (mid, sender, receiver, "text", content))
-    conn.commit()
-    conn.close()
-    return {"status": "ok"}
-
+# === ЗАГРУЗКА ФАЙЛОВ ===
 @app.post("/send_file")
-def send_file(sender: str = Form(...), receiver: str = Form(...), file: UploadFile = File(...)):
-    ext = file.filename.split(".")[-1]
-    fname = f"data/{uuid.uuid4()}.{ext}"
-    with open(fname, "wb") as f:
-        f.write(file.file.read())
+async def send_file(
+    sender_id: str = Form(...),
+    receiver_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    filename = f"{uuid.uuid4()}_{file.filename}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(await file.read())
 
-    ftype = "video" if ext.lower() in ["mp4", "webm", "avi"] else "image"
+    msg = {"from": sender_id, "file": f"/uploads/{filename}"}
+    messages[receiver_id].append(msg)
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    mid = str(uuid.uuid4())
-    c.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", (mid, sender, receiver, ftype, fname))
-    conn.commit()
-    conn.close()
-    return {"status": "ok", "file": fname}
+    if receiver_id in connections:
+        await connections[receiver_id].send_json(msg)
 
-@app.get("/inbox/{user_id}")
-def inbox(user_id: str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT sender, type, content FROM messages WHERE receiver=?", (user_id,))
-    rows = c.fetchall()
-    conn.close()
-    return [{"sender": r[0], "type": r[1], "content": r[2]} for r in rows]
+    return {"success": True, "file": f"/uploads/{filename}"}
 
-@app.get("/file/{path}")
-def get_file(path: str):
-    return FileResponse(path)
+@app.get("/uploads/{filename}")
+async def get_file(filename: str):
+    return FileResponse(os.path.join(UPLOAD_DIR, filename))
 
-# ----------- WebRTC Сигнализация ----------
-connections = {}
-
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
+# === ВЕБСОКЕТ ДЛЯ ЧАТА ===
+@app.websocket("/ws/chat/{user_id}")
+async def chat_ws(websocket: WebSocket, user_id: str):
     await websocket.accept()
     connections[user_id] = websocket
     try:
         while True:
             data = await websocket.receive_json()
-            target_id = data.get("to")
-            if target_id in connections:
-                await connections[target_id].send_json({**data, "from": user_id})
+            # {"to": "id", "text": "..."}
+            receiver_id = data.get("to")
+            msg = {"from": user_id, "text": data.get("text")}
+            if receiver_id in messages:
+                messages[receiver_id].append(msg)
+            if receiver_id in connections:
+                await connections[receiver_id].send_json(msg)
     except WebSocketDisconnect:
         del connections[user_id]
 
-# ----------- Статические файлы ----------
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# === ВЕБСОКЕТ ДЛЯ ВИДЕОЗВОНКОВ (WebRTC сигнализация) ===
+@app.websocket("/ws/rtc/{user_id}")
+async def rtc_ws(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+    rtc_connections[user_id] = websocket
+    try:
+        while True:
+            data = await websocket.receive_json()
+            # {"to": "id", "type": "offer/answer/candidate", ...}
+            target_id = data.get("to")
+            if target_id in rtc_connections:
+                await rtc_connections[target_id].send_json({**data, "from": user_id})
+    except WebSocketDisconnect:
+        del rtc_connections[user_id]
 
-@app.get("/")
-def index():
-    return HTMLResponse(open("static/index.html", "r", encoding="utf-8").read())
+# === ИНБОКС ===
+@app.get("/inbox/{user_id}")
+async def get_inbox(user_id: str):
+    return messages.get(user_id, [])

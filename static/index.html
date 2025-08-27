@@ -1,112 +1,247 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Chat + Video</title>
+<meta charset="UTF-8">
+<title>HackerChat Web</title>
+<style>
+body { margin:0; font-family:monospace; background:black; color:#0f0;}
+#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between; align-items:center;}
+#container { display:flex; height:calc(100vh - 40px);}
+#users { width:250px; background:#010; overflow-y:auto; border-right:1px solid #0f0; padding:5px;}
+#chat { flex:1; display:flex; flex-direction:column;}
+#messages { flex:1; padding:10px; overflow-y:auto;}
+#inputForm { display:flex; border-top:1px solid #0f0;}
+#inputForm input[type="text"] { flex:1; background:black; color:#0f0; border:none; padding:10px;}
+#inputForm input[type="file"] { background:#020; color:#0f0; border:1px solid #0f0; margin-left:5px; cursor:pointer;}
+#inputForm button { background:#0f0; color:black; border:none; padding:10px 15px; cursor:pointer;}
+.user-item { padding:5px; cursor:pointer;}
+.user-item:hover { background:#020; }
+.user-item.active { background:#050; }
+#addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
+#resetBtn, #loginBtn { background:#000; border:1px solid #0f0; color:#0f0; padding:5px 10px; cursor:pointer; transition:0.2s; margin-left:5px;}
+#resetBtn:hover, #loginBtn:hover { background:#0f0; color:black; }
+video { max-width:300px; margin:5px; border:1px solid #0f0; }
+</style>
 </head>
 <body>
-  <h2>Login / Register</h2>
-  <input id="username" placeholder="Username">
-  <input id="password" type="password" placeholder="Password">
-  <button onclick="register()">Register</button>
-  <button onclick="login()">Login</button>
 
-  <h2>Chat</h2>
-  <input id="receiver" placeholder="Receiver ID">
-  <input id="message" placeholder="Message">
-  <button onclick="sendMessage()">Send</button>
-  <button onclick="sendFile()">Send File</button>
-  <button onclick="startCall()">Call</button>
+<div id="header">
+    <span>Your ID: <span id="myId">loading...</span></span>
+    <div>
+        <button id="loginBtn">[ Login/Register ]</button>
+        <button id="callBtn">[ 📹 Call ]</button>
+        <button id="resetBtn">[ RESET DB ]</button>
+    </div>
+</div>
 
-  <div id="inbox"></div>
-
-  <h2>Video Call</h2>
-  <video id="localVideo" autoplay muted></video>
-  <video id="remoteVideo" autoplay></video>
+<div id="container">
+    <div id="users">
+        <div id="addContactBtn">+ Add Contact</div>
+    </div>
+    <div id="chat">
+        <div id="messages"></div>
+        <form id="inputForm">
+            <input id="messageInput" type="text" autocomplete="off" placeholder="Type a message"/>
+            <input id="fileInput" type="file"/>
+            <button>Send</button>
+        </form>
+        <div>
+            <video id="localVideo" autoplay muted playsinline></video>
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+    </div>
+</div>
 
 <script>
-let userId = null;
-let ws = null;
-let pc = null;
+const SERVER = window.location.origin;
+let userId = localStorage.getItem("userId");
+let username = localStorage.getItem("username");
+let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
+let selectedUser = null;
 
-async function register(){
-  let res = await fetch("/register", {
-    method:"POST",
-    body:new FormData(Object.assign(new FormData(), {
-      username: username.value, password: password.value
-    }))
-  });
-  let data = await res.json();
-  if(data.status==="ok"){ alert("Registered. Your ID: "+data.user_id); userId=data.user_id; }
-  else alert(data.msg);
-}
+let chatSocket = null;
+let rtcSocket = null;
+let peerConn = null;
 
-async function login(){
-  let fd = new FormData();
-  fd.append("username", username.value);
-  fd.append("password", password.value);
-  let res = await fetch("/login",{method:"POST",body:fd});
-  let data = await res.json();
-  if(data.status==="ok"){ alert("Logged in. ID:"+data.user_id); userId=data.user_id; connectWS(); }
-  else alert(data.msg);
-}
-
-async function sendMessage(){
-  let fd = new FormData();
-  fd.append("sender", userId);
-  fd.append("receiver", receiver.value);
-  fd.append("content", message.value);
-  await fetch("/send_message",{method:"POST",body:fd});
-}
-
-async function sendFile(){
-  let fd = new FormData();
-  fd.append("sender", userId);
-  fd.append("receiver", receiver.value);
-  fd.append("file", document.createElement("input").files[0]);
-  await fetch("/send_file",{method:"POST",body:fd});
-}
-
-function connectWS(){
-  ws = new WebSocket(`ws://${location.host}/ws/${userId}`);
-  ws.onmessage = async e=>{
-    let data = JSON.parse(e.data);
-    if(data.type==="offer"){
-      pc = createPeer();
-      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      let answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({to:data.from,type:"answer",sdp:answer}));
-    } else if(data.type==="answer"){
-      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-    } else if(data.type==="candidate"){
-      try { await pc.addIceCandidate(data.candidate); } catch(e){}
+// --- Login/Register ---
+async function loginOrRegister() {
+    const nick = prompt("Enter username:") || "Anon";
+    const pass = prompt("Enter password:") || "123";
+    let resp = await fetch(SERVER+"/login", {
+        method:"POST",
+        body: new URLSearchParams({username:nick, password:pass})
+    });
+    let data = await resp.json();
+    if(data.error){
+        // если юзера нет, регаем
+        resp = await fetch(SERVER+"/register", {
+            method:"POST",
+            body: new URLSearchParams({username:nick, password:pass})
+        });
+        data = await resp.json();
     }
-  };
+    userId = data.id;
+    username = data.username;
+    localStorage.setItem("userId", userId);
+    localStorage.setItem("username", username);
+    document.getElementById("myId").textContent = userId;
+    connectSockets();
 }
 
-function createPeer(){
-  let pc = new RTCPeerConnection();
-  pc.ontrack = e => { document.getElementById("remoteVideo").srcObject = e.streams[0]; };
-  pc.onicecandidate = e=>{
-    if(e.candidate) ws.send(JSON.stringify({to:receiver.value,type:"candidate",candidate:e.candidate}));
-  };
-  return pc;
+// --- Contacts ---
+function addContact(){
+    const newId = prompt("Enter user ID:");
+    if(!newId) return;
+    if(!contacts.find(c => c.id===newId)){
+        contacts.push({id:newId, name:newId.substring(0,6)});
+        localStorage.setItem("contacts", JSON.stringify(contacts));
+    }
+    renderContacts();
+}
+
+function renderContacts(){
+    const usersDiv = document.getElementById("users");
+    usersDiv.innerHTML = '<div id="addContactBtn">+ Add Contact</div>';
+    document.getElementById("addContactBtn").onclick = addContact;
+    contacts.forEach(u=>{
+        const div = document.createElement("div");
+        div.textContent = u.name;
+        div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active" : "");
+        div.onclick = ()=>{
+            selectedUser = u;
+            renderContacts();
+        };
+        usersDiv.appendChild(div);
+    });
+}
+
+// --- Chat WebSocket ---
+function connectSockets(){
+    if(chatSocket) chatSocket.close();
+    if(rtcSocket) rtcSocket.close();
+
+    chatSocket = new WebSocket(`${SERVER.replace("http","ws")}/ws/chat/${userId}`);
+    chatSocket.onmessage = e=>{
+        const msg = JSON.parse(e.data);
+        renderMessage(msg);
+    };
+
+    rtcSocket = new WebSocket(`${SERVER.replace("http","ws")}/ws/rtc/${userId}`);
+    rtcSocket.onmessage = async e=>{
+        const data = JSON.parse(e.data);
+        if(!peerConn) initPeer();
+
+        if(data.type==="offer"){
+            await peerConn.setRemoteDescription(data.offer);
+            const answer = await peerConn.createAnswer();
+            await peerConn.setLocalDescription(answer);
+            rtcSocket.send(JSON.stringify({to:data.from, type:"answer", answer}));
+        } else if(data.type==="answer"){
+            await peerConn.setRemoteDescription(data.answer);
+        } else if(data.type==="candidate"){
+            await peerConn.addIceCandidate(data.candidate);
+        }
+    };
+}
+
+// --- Messages ---
+function renderMessage(m){
+    const chatDiv = document.getElementById("messages");
+    const div = document.createElement("div");
+    if(m.text){
+        div.textContent = (m.from===userId?"Me":m.from)+": "+m.text;
+    }
+    if(m.file){
+        const ext = m.file.split(".").pop().toLowerCase();
+        if(["mp4","webm","ogg"].includes(ext)){
+            const v = document.createElement("video");
+            v.src = SERVER+m.file;
+            v.controls = true;
+            v.style.maxWidth="200px";
+            div.appendChild(v);
+        } else if(["jpg","jpeg","png","gif","webp"].includes(ext)){
+            const img = document.createElement("img");
+            img.src = SERVER+m.file;
+            img.style.maxWidth="200px";
+            div.appendChild(img);
+        } else {
+            const a = document.createElement("a");
+            a.href = SERVER+m.file;
+            a.textContent = "📎 File";
+            a.target="_blank";
+            div.appendChild(a);
+        }
+    }
+    chatDiv.appendChild(div);
+    chatDiv.scrollTop = chatDiv.scrollHeight;
+}
+
+// --- Send Message ---
+document.getElementById("inputForm").onsubmit = async e=>{
+    e.preventDefault();
+    if(!selectedUser){ alert("Select contact"); return; }
+    const msg = document.getElementById("messageInput").value;
+    const file = document.getElementById("fileInput").files[0];
+
+    if(msg.trim()){
+        chatSocket.send(JSON.stringify({to:selectedUser.id, text:msg}));
+        document.getElementById("messageInput").value="";
+    }
+    if(file){
+        const fd = new FormData();
+        fd.append("sender_id", userId);
+        fd.append("receiver_id", selectedUser.id);
+        fd.append("file", file);
+        await fetch(SERVER+"/send_file", {method:"POST", body:fd});
+        document.getElementById("fileInput").value="";
+    }
+};
+
+// --- Video Call ---
+function initPeer(){
+    peerConn = new RTCPeerConnection();
+    peerConn.onicecandidate = e=>{
+        if(e.candidate && selectedUser){
+            rtcSocket.send(JSON.stringify({to:selectedUser.id, type:"candidate", candidate:e.candidate}));
+        }
+    };
+    peerConn.ontrack = e=>{
+        document.getElementById("remoteVideo").srcObject = e.streams[0];
+    };
 }
 
 async function startCall(){
-  pc = createPeer();
-  try{
-    let stream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
-    document.getElementById("localVideo").srcObject = stream;
-    stream.getTracks().forEach(t=>pc.addTrack(t,stream));
-  }catch(e){
-    console.log("No camera/mic", e);
-  }
-  let offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({to:receiver.value,type:"offer",sdp:offer}));
+    if(!selectedUser){ alert("Select contact first"); return; }
+    initPeer();
+    try{
+        const stream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+        document.getElementById("localVideo").srcObject = stream;
+        stream.getTracks().forEach(t=>peerConn.addTrack(t, stream));
+    }catch(err){
+        alert("No camera/mic available");
+        return;
+    }
+    const offer = await peerConn.createOffer();
+    await peerConn.setLocalDescription(offer);
+    rtcSocket.send(JSON.stringify({to:selectedUser.id, type:"offer", offer}));
 }
+
+// --- Reset DB ---
+document.getElementById("resetBtn").onclick = async ()=>{
+    await fetch(SERVER+"/reset", {method:"POST"});
+    alert("DB Reset");
+};
+
+// --- Init ---
+document.getElementById("loginBtn").onclick = loginOrRegister;
+document.getElementById("callBtn").onclick = startCall;
+
+(async function(){
+    if(!userId) await loginOrRegister();
+    document.getElementById("myId").textContent = userId;
+    renderContacts();
+    connectSockets();
+})();
 </script>
 </body>
 </html>
