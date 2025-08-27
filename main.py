@@ -7,27 +7,27 @@ import os
 
 app = FastAPI()
 
-# Конфиг
+# --- Конфигурация ---
 DB_FILE = "db.sqlite"
-RESET_PASSWORD = "12345"  # поменяй здесь на свой пароль
-INDEX_FILE = os.path.join("static", "index.html")
+RESET_PASSWORD = "12345"  # измените на свой
+STATIC_DIR = "static"
+INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
-# Подключаем папку static
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
+# --- Статика ---
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # --- Инициализация БД ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Пользователи
+    # пользователи
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
-        display_name TEXT
+        display_name TEXT UNIQUE
     )
     """)
-    # Сообщения
+    # сообщения
     c.execute("""
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,27 +42,34 @@ def init_db():
 init_db()
 
 
-# --- Роут для index.html ---
+# --- Корень: index.html ---
 @app.get("/")
 async def root():
     return FileResponse(INDEX_FILE)
 
 
-# --- Регистрация ---
-@app.post("/register")
-async def register(req: Request):
+# --- Регистрация или логин ---
+@app.post("/login")
+async def login(req: Request):
     data = await req.json()
     display_name = data.get("display_name", "Anon")
-    user_id = str(uuid.uuid4())
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", (user_id, display_name))
-    conn.commit()
+    # ищем пользователя
+    c.execute("SELECT id FROM users WHERE display_name=?", (display_name,))
+    row = c.fetchone()
+    if row:
+        user_id = row[0]  # уже есть
+    else:
+        # создаём нового
+        user_id = str(uuid.uuid4())
+        c.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", (user_id, display_name))
+        conn.commit()
     conn.close()
     return {"user_id": user_id, "display_name": display_name}
 
 
-# --- Получить инфо о пользователе ---
+# --- Получить информацию о пользователе ---
 @app.get("/user/{user_id}")
 async def get_user(user_id: str):
     conn = sqlite3.connect(DB_FILE)
@@ -92,18 +99,18 @@ async def send(req: Request):
     return {"status": "ok"}
 
 
-# --- Получить все входящие ---
+# --- Получение сообщений ---
 @app.get("/inbox/{user_id}")
 async def inbox(user_id: str):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT sender, recipient, text FROM messages WHERE recipient=? OR sender=?", (user_id, user_id))
+    c.execute("SELECT sender, recipient, text FROM messages WHERE sender=? OR recipient=? ORDER BY id ASC", (user_id, user_id))
     rows = c.fetchall()
     conn.close()
     return [{"sender": r[0], "recipient": r[1], "text": r[2]} for r in rows]
 
 
-# --- Сброс базы ---
+# --- Сброс базы данных ---
 @app.post("/reset")
 async def reset(password: str):
     if password != RESET_PASSWORD:

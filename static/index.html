@@ -17,15 +17,18 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 .user-item:hover { background:#020; }
 .user-item.active { background:#050; }
 #addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
-#resetBtn { background:#000; border:1px solid #0f0; color:#0f0; padding:5px 10px; cursor:pointer; transition:0.2s;}
-#resetBtn:hover { background:#0f0; color:black; }
+#resetBtn, #loginBtn { background:#000; border:1px solid #0f0; color:#0f0; padding:5px 10px; cursor:pointer; transition:0.2s; margin-left:5px;}
+#resetBtn:hover, #loginBtn:hover { background:#0f0; color:black; }
 </style>
 </head>
 <body>
 
 <div id="header">
     <span>Your ID: <span id="myId">loading...</span></span>
-    <button id="resetBtn">[ RESET DB ]</button>
+    <div>
+        <button id="loginBtn">[ Login/Register ]</button>
+        <button id="resetBtn">[ RESET DB ]</button>
+    </div>
 </div>
 
 <div id="container">
@@ -43,39 +46,25 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 
 <script>
 const SERVER = window.location.origin;
-let token = localStorage.getItem("token");
 let userId = localStorage.getItem("userId");
+let displayName = localStorage.getItem("displayName");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
 let selectedUser = null;
 
-// -------- Регистрация / Логин --------
-async function ensureAuth() {
-    if (token && userId) return;
-
-    const username = prompt("Enter username:");
-    const password = prompt("Enter password:");
-
-    // пробуем логин
-    let resp = await fetch(SERVER+"/login", {
+// -------- Авторизация/Регистрация --------
+async function loginOrRegister() {
+    let nickname = prompt("Enter your nickname:") || "Anon";
+    const resp = await fetch(SERVER+"/login", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({username,password})
+        body: JSON.stringify({display_name: nickname})
     });
-
-    if (resp.status !== 200) {
-        // если не зашёл → регистрируем
-        resp = await fetch(SERVER+"/register", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({username,password})
-        });
-    }
-
     const data = await resp.json();
-    token = data.token;
     userId = data.user_id;
-    localStorage.setItem("token", token);
+    displayName = data.display_name;
     localStorage.setItem("userId", userId);
+    localStorage.setItem("displayName", displayName);
+    document.getElementById("myId").textContent = userId;
 }
 
 // -------- Контакты --------
@@ -83,7 +72,7 @@ async function addContact() {
     const newId = prompt("Enter user ID:");
     if(!newId) return;
     if(!contacts.find(c => c.id===newId)){
-        contacts.push({id:newId, name:newId.substring(0,6)});
+        contacts.push({id:newId, display_name:newId.substring(0,6)});
         localStorage.setItem("contacts", JSON.stringify(contacts));
     }
     renderContacts();
@@ -95,7 +84,7 @@ function renderContacts(){
     document.getElementById("addContactBtn").onclick = addContact;
     contacts.forEach(u=>{
         const div = document.createElement("div");
-        div.textContent = u.name;
+        div.textContent = u.display_name;
         div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active" : "");
         div.onclick = ()=>{
             selectedUser = u;
@@ -109,7 +98,6 @@ function renderContacts(){
 // -------- Сообщения --------
 async function loadMessages(){
     if(!selectedUser) return;
-    // исправлено: используем правильный эндпоинт с userId
     const resp = await fetch(`${SERVER}/inbox/${userId}`);
     const msgs = await resp.json();
     const chatDiv = document.getElementById("messages");
@@ -131,7 +119,6 @@ document.getElementById("inputForm").onsubmit = async function(e){
     if(!selectedUser) { alert("Select a user first"); return; }
     const msg = document.getElementById("messageInput").value;
     if(!msg.trim()) return;
-    // исправлено: отправка без ?token
     await fetch(SERVER+"/send", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
@@ -152,11 +139,14 @@ document.getElementById("resetBtn").onclick = async function(){
     location.reload();
 }
 
+// -------- Кнопка Login/Register --------
+document.getElementById("loginBtn").onclick = loginOrRegister;
+
 // -------- Автообновление --------
 setInterval(loadMessages,2000);
 
 (async function(){
-    await ensureAuth();
+    if(!userId) await loginOrRegister();
     document.getElementById("myId").textContent = userId;
     renderContacts();
 })();
