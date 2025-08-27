@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HackerChat Web</title>
+<title>Gigachat</title>
 <style>
 body { margin:0; font-family:monospace; background:black; color:#0f0;}
-#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between;}
+#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between; align-items:center;}
 #container { display:flex; height:calc(100vh - 40px);}
 #users { width:250px; background:#010; overflow-y:auto; border-right:1px solid #0f0; padding:5px;}
 #chat { flex:1; display:flex; flex-direction:column;}
@@ -17,13 +17,15 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 .user-item:hover { background:#020; }
 .user-item.active { background:#050; }
 #addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
+#resetBtn { background:#000; border:1px solid #0f0; color:#0f0; padding:5px 10px; cursor:pointer; transition:0.2s;}
+#resetBtn:hover { background:#0f0; color:black; }
 </style>
 </head>
 <body>
 
 <div id="header">
     <span>Your ID: <span id="myId">loading...</span></span>
-    <button id="resetBtn">Reset DB</button>
+    <button id="resetBtn">[ RESET DB ]</button>
 </div>
 
 <div id="container">
@@ -41,35 +43,47 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 
 <script>
 const SERVER = window.location.origin;
+let token = localStorage.getItem("token");
 let userId = localStorage.getItem("userId");
-let displayName = localStorage.getItem("displayName");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
 let selectedUser = null;
 
-// -------- Регистрация --------
-async function registerUser() {
-    displayName = prompt("Enter your nickname:") || "Anon";
-    const resp = await fetch(SERVER+"/register", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({display_name: displayName})
+// -------- Регистрация / Логин --------
+async function ensureAuth() {
+    if (token && userId) return;
+
+    const username = prompt("Enter username:");
+    const password = prompt("Enter password:");
+
+    // пробуем логин
+    let resp = await fetch(SERVER+"/login", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({username,password})
     });
+
+    if (resp.status !== 200) {
+        // если не зашёл → регистрируем
+        resp = await fetch(SERVER+"/register", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({username,password})
+        });
+    }
+
     const data = await resp.json();
+    token = data.token;
     userId = data.user_id;
+    localStorage.setItem("token", token);
     localStorage.setItem("userId", userId);
-    localStorage.setItem("displayName", displayName);
 }
 
 // -------- Контакты --------
 async function addContact() {
-    const newId = prompt("Enter the ID of the user you want to chat with:");
+    const newId = prompt("Enter user ID:");
     if(!newId) return;
-    const resp = await fetch(SERVER+"/user/"+newId);
-    const data = await resp.json();
-    if(data.error){ alert("User not found!"); return; }
     if(!contacts.find(c => c.id===newId)){
-        const newUser = {id:data.id, display_name:data.display_name || data.id.substring(0,8)};
-        contacts.push(newUser);
+        contacts.push({id:newId, name:newId.substring(0,6)});
         localStorage.setItem("contacts", JSON.stringify(contacts));
     }
     renderContacts();
@@ -81,12 +95,11 @@ function renderContacts(){
     document.getElementById("addContactBtn").onclick = addContact;
     contacts.forEach(u=>{
         const div = document.createElement("div");
-        div.textContent = u.display_name;
-        div.className = "user-item";
+        div.textContent = u.name;
+        div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active" : "");
         div.onclick = ()=>{
             selectedUser = u;
-            document.querySelectorAll(".user-item").forEach(el=>el.classList.remove("active"));
-            div.classList.add("active");
+            renderContacts();
             loadMessages();
         };
         usersDiv.appendChild(div);
@@ -96,14 +109,14 @@ function renderContacts(){
 // -------- Сообщения --------
 async function loadMessages(){
     if(!selectedUser) return;
-    const resp = await fetch(`${SERVER}/inbox/${userId}`);
+    const resp = await fetch(`${SERVER}/inbox?token=${token}`);
     const msgs = await resp.json();
     const chatDiv = document.getElementById("messages");
     chatDiv.innerHTML = "";
     msgs.forEach(m=>{
         if((m.sender===selectedUser.id && m.recipient===userId) || (m.sender===userId && m.recipient===selectedUser.id)){
             const div = document.createElement("div");
-            div.textContent = (m.sender===userId?"Me":selectedUser.display_name)+": "+m.text;
+            div.textContent = (m.sender===userId?"Me":selectedUser.name)+": "+m.text;
             chatDiv.appendChild(div);
         }
     });
@@ -116,10 +129,10 @@ document.getElementById("inputForm").onsubmit = async function(e){
     if(!selectedUser) { alert("Select a user first"); return; }
     const msg = document.getElementById("messageInput").value;
     if(!msg.trim()) return;
-    await fetch(SERVER+"/send", {
+    await fetch(SERVER+"/send?token="+token, {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({sender:userId, recipient:selectedUser.id, text:msg})
+        body: JSON.stringify({recipient:selectedUser.id, text:msg})
     });
     document.getElementById("messageInput").value="";
     loadMessages();
@@ -132,15 +145,16 @@ document.getElementById("resetBtn").onclick = async function(){
     const resp = await fetch(`${SERVER}/reset?password=${pwd}`, {method:"POST"});
     const data = await resp.json();
     alert(JSON.stringify(data));
+    localStorage.clear();
+    location.reload();
 }
 
 // -------- Автообновление --------
-setInterval(loadMessages,1500);
+setInterval(loadMessages,2000);
 
 (async function(){
-    if(!userId) await registerUser();
+    await ensureAuth();
     document.getElementById("myId").textContent = userId;
-    if(contacts.length===0) await addContact();
     renderContacts();
 })();
 </script>

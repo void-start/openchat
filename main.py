@@ -1,123 +1,126 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import sqlite3
-import uuid
-from datetime import datetime
+import sqlite3, hashlib, secrets, os
 
-# ----------------- APP -----------------
 app = FastAPI()
+DB_FILE = "chat.db"
 
-# Разрешаем CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ---------------- Инициализация базы ----------------
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    # пользователи
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE,
+        password TEXT
+    )
+    """)
+    # сессии
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS sessions (
+        user_id TEXT,
+        token TEXT
+    )
+    """)
+    # сообщения
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS messages (
+        sender TEXT,
+        recipient TEXT,
+        text TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
 
-# Статика на /static
-app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+init_db()
 
-# Корень → редирект на фронтенд
-@app.get("/")
-def root():
-    return RedirectResponse(url="/static/index.html")
+# ---------------- Утилиты ----------------
+def get_db():
+    return sqlite3.connect(DB_FILE)
 
-# ----------------- БД -----------------
-conn = sqlite3.connect("chat.db", check_same_thread=False)
-cur = conn.cursor()
+def hash_pw(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    display_name TEXT,
-    created_at TEXT
-)
-""")
-cur.execute("""
-CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    sender TEXT,
-    recipient TEXT,
-    text TEXT,
-    created_at TEXT
-)
-""")
-conn.commit()
+def auth(token: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM sessions WHERE token=?", (token,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(401, "Unauthorized")
+    return row[0]
 
-# ----------------- MODELS -----------------
-class RegisterRequest(BaseModel):
-    display_name: str | None = None
+# ---------------- Модели ----------------
+class RegisterReq(BaseModel):
+    username: str
+    password: str
 
-class SetNameRequest(BaseModel):
-    user_id: str
-    display_name: str
+class LoginReq(BaseModel):
+    username: str
+    password: str
 
-class MessageIn(BaseModel):
-    sender: str
+class SendReq(BaseModel):
     recipient: str
     text: str
 
-# ----------------- API -----------------
+# ---------------- API ----------------
 @app.post("/register")
-def register(req: RegisterRequest):
-    user_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
-    cur.execute("INSERT INTO users (id, display_name, created_at) VALUES (?, ?, ?)",
-                (user_id, req.display_name, now))
+def register(req: RegisterReq):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE username=?", (req.username,))
+    if cur.fetchone():
+        conn.close()
+        raise HTTPException(400, "Username already exists")
+    user_id = secrets.token_hex(8)
+    pw_hash = hash_pw(req.password)
+    cur.execute("INSERT INTO users(id, username, password) VALUES(?,?,?)",
+                (user_id, req.username, pw_hash))
+    token = secrets.token_hex(16)
+    cur.execute("INSERT INTO sessions(user_id, token) VALUES(?,?)", (user_id, token))
     conn.commit()
-    return {"user_id": user_id, "display_name": req.display_name}
+    conn.close()
+    return {"token": token, "user_id": user_id}
 
-@app.post("/set_name")
-def set_name(req: SetNameRequest):
-    cur.execute("UPDATE users SET display_name=? WHERE id=?", (req.display_name, req.user_id))
+@app.post("/login")
+def login(req: LoginReq):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id,password FROM users WHERE username=?", (req.username,))
+    row = cur.fetchone()
+    if not row or row[1] != hash_pw(req.password):
+        conn.close()
+        raise HTTPException(401, "Invalid credentials")
+    user_id = row[0]
+    token = secrets.token_hex(16)
+    cur.execute("INSERT INTO sessions(user_id, token) VALUES(?,?)", (user_id, token))
     conn.commit()
-    return {"status": "ok"}
-
-@app.get("/users")
-def list_users():
-    cur.execute("SELECT id, display_name FROM users")
-    rows = cur.fetchall()
-    return [{"id": r[0], "display_name": r[1]} for r in rows]
+    conn.close()
+    return {"token": token, "user_id": user_id}
 
 @app.post("/send")
-def send(msg: MessageIn):
-    msg_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
-    cur.execute("INSERT INTO messages (id, sender, recipient, text, created_at) VALUES (?, ?, ?, ?, ?)",
-                (msg_id, msg.sender, msg.recipient, msg.text, now))
+def send(req: SendReq, token: str):
+    sender = auth(token)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO messages(sender,recipient,text) VALUES(?,?,?)",
+                (sender, req.recipient, req.text))
     conn.commit()
-    return {"status": "ok"}
+    conn.close()
+    return {"ok": True}
 
-@app.get("/inbox/{user_id}")
-def inbox(user_id: str):
-    cur.execute("SELECT sender, recipient, text, created_at FROM messages ORDER BY created_at ASC")
+@app.get("/inbox")
+def inbox(token: str):
+    user_id = auth(token)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT sender,text FROM messages WHERE recipient=? OR sender=?",
+                (user_id, user_id))
     rows = cur.fetchall()
-    # возвращаем только сообщения между user_id и любым его контактом
-    return [
-        {"sender": r[0], "recipient": r[1], "text": r[2], "created_at": r[3]}
-        for r in rows if r[0]==user_id or r[1]==user_id
-    ]
+    conn.close()
+    return [{"sender": r[0], "text": r[1]} for r in rows]
 
-@app.get("/user/{user_id}")
-def get_user(user_id: str):
-    cur.execute("SELECT id, display_name FROM users WHERE id=?", (user_id,))
-    row = cur.fetchone()
-    if row:
-        return {"id": row[0], "display_name": row[1]}
-    return {"error": "not found"}
-
-# ----------------- RESET с паролем -----------------
-RESET_PASSWORD = "12345"  # поменяй на свой пароль
-
-@app.post("/reset")
-def reset(password: str):
-    if password != RESET_PASSWORD:
-        return {"error": "wrong password"}
-    cur.execute("DELETE FROM users")
-    cur.execute("DELETE FROM messages")
-    conn.commit()
-    return {"status": "ok"}
