@@ -11,7 +11,8 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 #chat { flex:1; display:flex; flex-direction:column;}
 #messages { flex:1; padding:10px; overflow-y:auto;}
 #inputForm { display:flex; border-top:1px solid #0f0;}
-#inputForm input { flex:1; background:black; color:#0f0; border:none; padding:10px;}
+#inputForm input[type="text"] { flex:1; background:black; color:#0f0; border:none; padding:10px;}
+#inputForm input[type="file"] { background:#020; color:#0f0; border:1px solid #0f0; margin-left:5px; cursor:pointer;}
 #inputForm button { background:#0f0; color:black; border:none; padding:10px 15px; cursor:pointer;}
 .user-item { padding:5px; cursor:pointer;}
 .user-item:hover { background:#020; }
@@ -38,7 +39,8 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
     <div id="chat">
         <div id="messages"></div>
         <form id="inputForm">
-            <input id="messageInput" autocomplete="off" placeholder="Type a message"/>
+            <input id="messageInput" type="text" autocomplete="off" placeholder="Type a message"/>
+            <input id="fileInput" type="file"/>
             <button>Send</button>
         </form>
     </div>
@@ -51,7 +53,7 @@ let displayName = localStorage.getItem("displayName");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
 let selectedUser = null;
 
-// -------- Авторизация/Регистрация --------
+// --- Login/Register ---
 async function loginOrRegister() {
     let nickname = prompt("Enter your nickname:") || "Anon";
     const resp = await fetch(SERVER+"/login", {
@@ -67,7 +69,7 @@ async function loginOrRegister() {
     document.getElementById("myId").textContent = userId;
 }
 
-// -------- Контакты --------
+// --- Contacts ---
 async function addContact() {
     const newId = prompt("Enter user ID:");
     if(!newId) return;
@@ -95,7 +97,7 @@ function renderContacts(){
     });
 }
 
-// -------- Сообщения --------
+// --- Load messages ---
 async function loadMessages(){
     if(!selectedUser) return;
     const resp = await fetch(`${SERVER}/inbox/${userId}`);
@@ -105,61 +107,79 @@ async function loadMessages(){
     msgs.forEach(m=>{
         if((m.sender===selectedUser.id && m.recipient===userId) || 
            (m.sender===userId && m.recipient===selectedUser.id)){
-            const div = document.createElement("div");
-            div.textContent = (m.sender===userId ? "Me" : selectedUser.display_name)+": "+m.text;
-            chatDiv.appendChild(div);
+            if(m.text.startsWith("[file]")){
+                const filename = m.text.replace("[file]","");
+                const ext = filename.split('.').pop().toLowerCase();
+                if(["jpg","jpeg","png","gif","webp"].includes(ext)){
+                    const img = document.createElement("img");
+                    img.src = SERVER+"/media/"+filename;
+                    img.style.maxWidth="200px";
+                    chatDiv.appendChild(img);
+                } else {
+                    const a = document.createElement("a");
+                    a.href = SERVER+"/media/"+filename;
+                    a.textContent = "📎 File";
+                    a.target="_blank";
+                    chatDiv.appendChild(a);
+                }
+            } else {
+                const div = document.createElement("div");
+                div.textContent = (m.sender===userId?"Me":selectedUser.display_name)+": "+m.text;
+                chatDiv.appendChild(div);
+            }
         }
     });
     chatDiv.scrollTop = chatDiv.scrollHeight;
 }
 
-// -------- Отправка --------
+// --- Send message ---
 document.getElementById("inputForm").onsubmit = async function(e){
     e.preventDefault();
     if(!selectedUser) { alert("Select a user first"); return; }
+
     const msg = document.getElementById("messageInput").value;
-    if(!msg.trim()) return;
-    await fetch(SERVER+"/send", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({sender:userId, recipient:selectedUser.id, text:msg})
-    });
-    document.getElementById("messageInput").value="";
+    const file = document.getElementById("fileInput").files[0];
+
+    if(file){
+        const formData = new FormData();
+        formData.append("sender", userId);
+        formData.append("recipient", selectedUser.id);
+        formData.append("file", file);
+        await fetch(SERVER+"/send_file", { method:"POST", body:formData });
+        document.getElementById("fileInput").value="";
+    }
+    if(msg.trim()){
+        await fetch(SERVER+"/send", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({sender:userId, recipient:selectedUser.id, text:msg})
+        });
+        document.getElementById("messageInput").value="";
+    }
     loadMessages();
 }
 
-// -------- Сброс базы --------
+// --- Reset DB ---
 document.getElementById("resetBtn").onclick = async function(){
     const pwd = prompt("Enter reset password:");
     if(!pwd) return;
     const resp = await fetch(`${SERVER}/reset?password=${pwd}`, {method:"POST"});
     const data = await resp.json();
     alert(JSON.stringify(data));
-    localStorage.clear();
-    location.reload();
 }
 
-// -------- Кнопка Login/Register --------
+// --- Login/Register Button ---
 document.getElementById("loginBtn").onclick = loginOrRegister;
 
-// -------- Автообновление --------
-setInterval(loadMessages,2000);
+// --- Auto-update ---
+setInterval(loadMessages, 2000);
 
+// --- Init ---
 (async function(){
-    if(userId){
-        // проверяем существование на сервере
-        const resp = await fetch(`${SERVER}/user/${userId}`);
-        if(resp.status === 404){
-            localStorage.removeItem("userId");
-            localStorage.removeItem("displayName");
-            userId = null;
-        }
-    }
     if(!userId) await loginOrRegister();
     document.getElementById("myId").textContent = userId;
     renderContacts();
 })();
 </script>
-
 </body>
 </html>
