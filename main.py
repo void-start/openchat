@@ -1,32 +1,36 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import sqlite3, hashlib, secrets, os
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+import sqlite3
+import uuid
+import os
 
 app = FastAPI()
-DB_FILE = "chat.db"
 
-# ---------------- Инициализация базы ----------------
+# Конфиг
+DB_FILE = "db.sqlite"
+RESET_PASSWORD = "12345"  # поменяй здесь на свой пароль
+INDEX_FILE = os.path.join("static", "index.html")
+
+# Подключаем папку static
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# --- Инициализация БД ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    # пользователи
-    cur.execute("""
+    c = conn.cursor()
+    # Пользователи
+    c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        password TEXT
+        display_name TEXT
     )
     """)
-    # сессии
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS sessions (
-        user_id TEXT,
-        token TEXT
-    )
-    """)
-    # сообщения
-    cur.execute("""
+    # Сообщения
+    c.execute("""
     CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender TEXT,
         recipient TEXT,
         text TEXT
@@ -37,90 +41,77 @@ def init_db():
 
 init_db()
 
-# ---------------- Утилиты ----------------
-def get_db():
-    return sqlite3.connect(DB_FILE)
 
-def hash_pw(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
+# --- Роут для index.html ---
+@app.get("/")
+async def root():
+    return FileResponse(INDEX_FILE)
 
-def auth(token: str):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM sessions WHERE token=?", (token,))
-    row = cur.fetchone()
+
+# --- Регистрация ---
+@app.post("/register")
+async def register(req: Request):
+    data = await req.json()
+    display_name = data.get("display_name", "Anon")
+    user_id = str(uuid.uuid4())
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", (user_id, display_name))
+    conn.commit()
+    conn.close()
+    return {"user_id": user_id, "display_name": display_name}
+
+
+# --- Получить инфо о пользователе ---
+@app.get("/user/{user_id}")
+async def get_user(user_id: str):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, display_name FROM users WHERE id=?", (user_id,))
+    row = c.fetchone()
     conn.close()
     if not row:
-        raise HTTPException(401, "Unauthorized")
-    return row[0]
+        return JSONResponse({"error": "User not found"}, status_code=404)
+    return {"id": row[0], "display_name": row[1]}
 
-# ---------------- Модели ----------------
-class RegisterReq(BaseModel):
-    username: str
-    password: str
 
-class LoginReq(BaseModel):
-    username: str
-    password: str
-
-class SendReq(BaseModel):
-    recipient: str
-    text: str
-
-# ---------------- API ----------------
-@app.post("/register")
-def register(req: RegisterReq):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE username=?", (req.username,))
-    if cur.fetchone():
-        conn.close()
-        raise HTTPException(400, "Username already exists")
-    user_id = secrets.token_hex(8)
-    pw_hash = hash_pw(req.password)
-    cur.execute("INSERT INTO users(id, username, password) VALUES(?,?,?)",
-                (user_id, req.username, pw_hash))
-    token = secrets.token_hex(16)
-    cur.execute("INSERT INTO sessions(user_id, token) VALUES(?,?)", (user_id, token))
-    conn.commit()
-    conn.close()
-    return {"token": token, "user_id": user_id}
-
-@app.post("/login")
-def login(req: LoginReq):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT id,password FROM users WHERE username=?", (req.username,))
-    row = cur.fetchone()
-    if not row or row[1] != hash_pw(req.password):
-        conn.close()
-        raise HTTPException(401, "Invalid credentials")
-    user_id = row[0]
-    token = secrets.token_hex(16)
-    cur.execute("INSERT INTO sessions(user_id, token) VALUES(?,?)", (user_id, token))
-    conn.commit()
-    conn.close()
-    return {"token": token, "user_id": user_id}
-
+# --- Отправка сообщений ---
 @app.post("/send")
-def send(req: SendReq, token: str):
-    sender = auth(token)
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO messages(sender,recipient,text) VALUES(?,?,?)",
-                (sender, req.recipient, req.text))
+async def send(req: Request):
+    data = await req.json()
+    sender = data.get("sender")
+    recipient = data.get("recipient")
+    text = data.get("text")
+    if not (sender and recipient and text):
+        return JSONResponse({"error": "Missing fields"}, status_code=400)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (sender, recipient, text) VALUES (?, ?, ?)", (sender, recipient, text))
     conn.commit()
     conn.close()
-    return {"ok": True}
+    return {"status": "ok"}
 
-@app.get("/inbox")
-def inbox(token: str):
-    user_id = auth(token)
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT sender,text FROM messages WHERE recipient=? OR sender=?",
-                (user_id, user_id))
-    rows = cur.fetchall()
+
+# --- Получить все входящие ---
+@app.get("/inbox/{user_id}")
+async def inbox(user_id: str):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT sender, recipient, text FROM messages WHERE recipient=? OR sender=?", (user_id, user_id))
+    rows = c.fetchall()
     conn.close()
-    return [{"sender": r[0], "text": r[1]} for r in rows]
+    return [{"sender": r[0], "recipient": r[1], "text": r[2]} for r in rows]
 
+
+# --- Сброс базы ---
+@app.post("/reset")
+async def reset(password: str):
+    if password != RESET_PASSWORD:
+        return JSONResponse({"error": "Wrong password"}, status_code=403)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM users")
+    c.execute("DELETE FROM messages")
+    conn.commit()
+    conn.close()
+    return {"status": "reset done"}
