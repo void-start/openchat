@@ -1,5 +1,8 @@
 fastapi
 uvicorn
 pydantic
+<<<<<<< HEAD
 python-multipart
 websockets
+=======
+>>>>>>> parent of 480a4ea (rec)
