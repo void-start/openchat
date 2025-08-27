@@ -4,23 +4,27 @@
 <meta charset="UTF-8">
 <title>HackerChat Web</title>
 <style>
-body { margin:0; font-family:monospace; background:black; color:#0f0;}
+body { margin:0; font-family: monospace; background:black; color:#0f0;}
 #header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between; align-items:center;}
-#container { display:flex; height:calc(100vh - 40px);}
+#container { display:flex; height:calc(100vh - 50px);}
 #users { width:250px; background:#010; overflow-y:auto; border-right:1px solid #0f0; padding:5px;}
 #chat { flex:1; display:flex; flex-direction:column;}
-#messages { flex:1; padding:10px; overflow-y:auto;}
-#inputForm { display:flex; border-top:1px solid #0f0;}
-#inputForm input[type="text"] { flex:1; background:black; color:#0f0; border:none; padding:10px;}
-#inputForm input[type="file"] { background:#020; color:#0f0; border:1px solid #0f0; margin-left:5px; cursor:pointer;}
-#inputForm button { background:#0f0; color:black; border:none; padding:10px 15px; cursor:pointer;}
-.user-item { padding:5px; cursor:pointer;}
+#messages { flex:1; padding:10px; overflow-y:auto; word-break:break-word;}
+#inputForm { display:flex; border-top:1px solid #0f0; padding:5px;}
+#inputForm input[type="text"] { flex:1; background:black; color:#0f0; border:none; padding:8px; margin-right:5px;}
+#inputForm input[type="file"] { background:#020; color:#0f0; border:1px solid #0f0; cursor:pointer; margin-right:5px;}
+#inputForm button { background:#0f0; color:black; border:none; padding:8px 15px; cursor:pointer;}
+.user-item { padding:5px; cursor:pointer; border-bottom:1px solid #020;}
 .user-item:hover { background:#020; }
 .user-item.active { background:#050; }
 #addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
-#resetBtn, #loginBtn { background:#000; border:1px solid #0f0; color:#0f0; padding:5px 10px; cursor:pointer; transition:0.2s; margin-left:5px;}
-#resetBtn:hover, #loginBtn:hover { background:#0f0; color:black; }
-video { max-width:300px; margin:5px; border:1px solid #0f0; }
+button { transition:0.2s; }
+button:hover { background:#0f0; color:black; }
+#loginBtn, #resetBtn { background:#010; color:#0f0; border:1px solid #0f0; margin-left:5px; padding:5px 10px;}
+#loginBtn:hover, #resetBtn:hover { background:#0f0; color:black;}
+img { max-width:200px; max-height:200px; display:block; margin:5px 0; border:1px solid #0f0; }
+a { color:#0f0; text-decoration:none; }
+a:hover { text-decoration:underline; color:#5f5; }
 </style>
 </head>
 <body>
@@ -28,9 +32,8 @@ video { max-width:300px; margin:5px; border:1px solid #0f0; }
 <div id="header">
     <span>Your ID: <span id="myId">loading...</span></span>
     <div>
-        <button id="loginBtn">[ Login/Register ]</button>
-        <button id="callBtn">[ 📹 Call ]</button>
-        <button id="resetBtn">[ RESET DB ]</button>
+        <button id="loginBtn">Login / Register</button>
+        <button id="resetBtn">Reset DB</button>
     </div>
 </div>
 
@@ -41,59 +44,42 @@ video { max-width:300px; margin:5px; border:1px solid #0f0; }
     <div id="chat">
         <div id="messages"></div>
         <form id="inputForm">
-            <input id="messageInput" type="text" autocomplete="off" placeholder="Type a message"/>
+            <input id="messageInput" type="text" placeholder="Type a message"/>
             <input id="fileInput" type="file"/>
             <button>Send</button>
         </form>
-        <div>
-            <video id="localVideo" autoplay muted playsinline></video>
-            <video id="remoteVideo" autoplay playsinline></video>
-        </div>
     </div>
 </div>
 
 <script>
 const SERVER = window.location.origin;
 let userId = localStorage.getItem("userId");
-let username = localStorage.getItem("username");
+let displayName = localStorage.getItem("displayName");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
 let selectedUser = null;
 
-let chatSocket = null;
-let rtcSocket = null;
-let peerConn = null;
-
 // --- Login/Register ---
-async function loginOrRegister() {
-    const nick = prompt("Enter username:") || "Anon";
-    const pass = prompt("Enter password:") || "123";
-    let resp = await fetch(SERVER+"/login", {
+async function loginOrRegister(){
+    let nickname = prompt("Enter your nickname:") || "Anon";
+    const resp = await fetch(SERVER+"/login", {
         method:"POST",
-        body: new URLSearchParams({username:nick, password:pass})
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({display_name: nickname})
     });
-    let data = await resp.json();
-    if(data.error){
-        // если юзера нет, регаем
-        resp = await fetch(SERVER+"/register", {
-            method:"POST",
-            body: new URLSearchParams({username:nick, password:pass})
-        });
-        data = await resp.json();
-    }
-    userId = data.id;
-    username = data.username;
+    const data = await resp.json();
+    userId = data.user_id;
+    displayName = data.display_name;
     localStorage.setItem("userId", userId);
-    localStorage.setItem("username", username);
+    localStorage.setItem("displayName", displayName);
     document.getElementById("myId").textContent = userId;
-    connectSockets();
 }
 
 // --- Contacts ---
-function addContact(){
+async function addContact(){
     const newId = prompt("Enter user ID:");
     if(!newId) return;
-    if(!contacts.find(c => c.id===newId)){
-        contacts.push({id:newId, name:newId.substring(0,6)});
+    if(!contacts.find(c=>c.id===newId)){
+        contacts.push({id:newId, display_name:newId.substring(0,6)});
         localStorage.setItem("contacts", JSON.stringify(contacts));
     }
     renderContacts();
@@ -105,142 +91,98 @@ function renderContacts(){
     document.getElementById("addContactBtn").onclick = addContact;
     contacts.forEach(u=>{
         const div = document.createElement("div");
-        div.textContent = u.name;
-        div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active" : "");
+        div.textContent = u.display_name;
+        div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active":"");
         div.onclick = ()=>{
             selectedUser = u;
             renderContacts();
+            loadMessages();
         };
         usersDiv.appendChild(div);
     });
 }
 
-// --- Chat WebSocket ---
-function connectSockets(){
-    if(chatSocket) chatSocket.close();
-    if(rtcSocket) rtcSocket.close();
-
-    chatSocket = new WebSocket(`${SERVER.replace("http","ws")}/ws/chat/${userId}`);
-    chatSocket.onmessage = e=>{
-        const msg = JSON.parse(e.data);
-        renderMessage(msg);
-    };
-
-    rtcSocket = new WebSocket(`${SERVER.replace("http","ws")}/ws/rtc/${userId}`);
-    rtcSocket.onmessage = async e=>{
-        const data = JSON.parse(e.data);
-        if(!peerConn) initPeer();
-
-        if(data.type==="offer"){
-            await peerConn.setRemoteDescription(data.offer);
-            const answer = await peerConn.createAnswer();
-            await peerConn.setLocalDescription(answer);
-            rtcSocket.send(JSON.stringify({to:data.from, type:"answer", answer}));
-        } else if(data.type==="answer"){
-            await peerConn.setRemoteDescription(data.answer);
-        } else if(data.type==="candidate"){
-            await peerConn.addIceCandidate(data.candidate);
-        }
-    };
-}
-
-// --- Messages ---
-function renderMessage(m){
+// --- Load messages ---
+async function loadMessages(){
+    if(!selectedUser) return;
+    const resp = await fetch(`${SERVER}/inbox/${userId}`);
+    const msgs = await resp.json();
     const chatDiv = document.getElementById("messages");
-    const div = document.createElement("div");
-    if(m.text){
-        div.textContent = (m.from===userId?"Me":m.from)+": "+m.text;
-    }
-    if(m.file){
-        const ext = m.file.split(".").pop().toLowerCase();
-        if(["mp4","webm","ogg"].includes(ext)){
-            const v = document.createElement("video");
-            v.src = SERVER+m.file;
-            v.controls = true;
-            v.style.maxWidth="200px";
-            div.appendChild(v);
-        } else if(["jpg","jpeg","png","gif","webp"].includes(ext)){
-            const img = document.createElement("img");
-            img.src = SERVER+m.file;
-            img.style.maxWidth="200px";
-            div.appendChild(img);
-        } else {
-            const a = document.createElement("a");
-            a.href = SERVER+m.file;
-            a.textContent = "📎 File";
-            a.target="_blank";
-            div.appendChild(a);
+    chatDiv.innerHTML = "";
+    msgs.forEach(m=>{
+        if((m.sender===selectedUser.id && m.recipient===userId) ||
+           (m.sender===userId && m.recipient===selectedUser.id)){
+            if(m.text.startsWith("[file]")){
+                const filename = m.text.replace("[file]","");
+                const ext = filename.split('.').pop().toLowerCase();
+                if(["jpg","jpeg","png","gif","webp"].includes(ext)){
+                    const img = document.createElement("img");
+                    img.src = SERVER+"/media/"+filename;
+                    chatDiv.appendChild(img);
+                } else {
+                    const a = document.createElement("a");
+                    a.href = SERVER+"/media/"+filename;
+                    a.textContent = "📎 File";
+                    a.target="_blank";
+                    chatDiv.appendChild(a);
+                }
+            } else {
+                const div = document.createElement("div");
+                div.textContent = (m.sender===userId?"Me":selectedUser.display_name)+": "+m.text;
+                chatDiv.appendChild(div);
+            }
         }
-    }
-    chatDiv.appendChild(div);
+    });
     chatDiv.scrollTop = chatDiv.scrollHeight;
 }
 
-// --- Send Message ---
-document.getElementById("inputForm").onsubmit = async e=>{
+// --- Send message ---
+document.getElementById("inputForm").onsubmit = async function(e){
     e.preventDefault();
-    if(!selectedUser){ alert("Select contact"); return; }
+    if(!selectedUser){ alert("Select a user first"); return; }
+
     const msg = document.getElementById("messageInput").value;
     const file = document.getElementById("fileInput").files[0];
 
-    if(msg.trim()){
-        chatSocket.send(JSON.stringify({to:selectedUser.id, text:msg}));
-        document.getElementById("messageInput").value="";
-    }
     if(file){
-        const fd = new FormData();
-        fd.append("sender_id", userId);
-        fd.append("receiver_id", selectedUser.id);
-        fd.append("file", file);
-        await fetch(SERVER+"/send_file", {method:"POST", body:fd});
+        const formData = new FormData();
+        formData.append("sender", userId);
+        formData.append("recipient", selectedUser.id);
+        formData.append("file", file);
+        await fetch(SERVER+"/send_file",{method:"POST", body:formData});
         document.getElementById("fileInput").value="";
     }
-};
-
-// --- Video Call ---
-function initPeer(){
-    peerConn = new RTCPeerConnection();
-    peerConn.onicecandidate = e=>{
-        if(e.candidate && selectedUser){
-            rtcSocket.send(JSON.stringify({to:selectedUser.id, type:"candidate", candidate:e.candidate}));
-        }
-    };
-    peerConn.ontrack = e=>{
-        document.getElementById("remoteVideo").srcObject = e.streams[0];
-    };
-}
-
-async function startCall(){
-    if(!selectedUser){ alert("Select contact first"); return; }
-    initPeer();
-    try{
-        const stream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
-        document.getElementById("localVideo").srcObject = stream;
-        stream.getTracks().forEach(t=>peerConn.addTrack(t, stream));
-    }catch(err){
-        alert("No camera/mic available");
-        return;
+    if(msg.trim()){
+        await fetch(SERVER+"/send",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({sender:userId, recipient:selectedUser.id, text:msg})
+        });
+        document.getElementById("messageInput").value="";
     }
-    const offer = await peerConn.createOffer();
-    await peerConn.setLocalDescription(offer);
-    rtcSocket.send(JSON.stringify({to:selectedUser.id, type:"offer", offer}));
+    loadMessages();
 }
 
 // --- Reset DB ---
-document.getElementById("resetBtn").onclick = async ()=>{
-    await fetch(SERVER+"/reset", {method:"POST"});
-    alert("DB Reset");
-};
+document.getElementById("resetBtn").onclick = async function(){
+    const pwd = prompt("Enter reset password:");
+    if(!pwd) return;
+    const resp = await fetch(`${SERVER}/reset?password=${pwd}`, {method:"POST"});
+    const data = await resp.json();
+    alert(JSON.stringify(data));
+}
+
+// --- Login/Register Button ---
+document.getElementById("loginBtn").onclick = loginOrRegister;
+
+// --- Auto-update ---
+setInterval(loadMessages, 2000);
 
 // --- Init ---
-document.getElementById("loginBtn").onclick = loginOrRegister;
-document.getElementById("callBtn").onclick = startCall;
-
 (async function(){
     if(!userId) await loginOrRegister();
     document.getElementById("myId").textContent = userId;
     renderContacts();
-    connectSockets();
 })();
 </script>
 </body>
