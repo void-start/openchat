@@ -1,134 +1,124 @@
-from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+import os
 import sqlite3
 import uuid
-import os
-import shutil
+from fastapi import FastAPI, Form, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-# --- Конфигурация ---
-DB_FILE = "db.sqlite"
-RESET_PASSWORD = "12345"  # смените на свой
-STATIC_DIR = "static"
-INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
-MEDIA_DIR = "media"
-os.makedirs(MEDIA_DIR, exist_ok=True)
+# ----------- База данных ----------
+if not os.path.exists("data"):
+    os.makedirs("data")
 
-# --- Статика ---
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
+DB_FILE = "data/chat.db"
 
-# --- Инициализация БД ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
-        display_name TEXT UNIQUE
-    )
-    """)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
         sender TEXT,
-        recipient TEXT,
-        text TEXT
-    )
-    """)
+        receiver TEXT,
+        type TEXT,
+        content TEXT
+    )""")
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- Корень ---
-@app.get("/")
-async def root():
-    return FileResponse(INDEX_FILE)
-
-# --- Login / Register ---
-@app.post("/login")
-async def login(req: Request):
-    data = await req.json()
-    display_name = data.get("display_name", "Anon")
+# ----------- Авторизация ----------
+@app.post("/register")
+def register(username: str = Form(...), password: str = Form(...)):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE display_name=?", (display_name,))
-    row = c.fetchone()
-    if row:
-        user_id = row[0]
-    else:
-        user_id = str(uuid.uuid4())
-        c.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", (user_id, display_name))
+    try:
+        uid = str(uuid.uuid4())
+        c.execute("INSERT INTO users VALUES (?, ?, ?)", (uid, username, password))
         conn.commit()
-    conn.close()
-    return {"user_id": user_id, "display_name": display_name}
+        return {"status": "ok", "user_id": uid}
+    except sqlite3.IntegrityError:
+        return {"status": "error", "msg": "Username taken"}
+    finally:
+        conn.close()
 
-# --- Получить пользователя ---
-@app.get("/user/{user_id}")
-async def get_user(user_id: str):
+@app.post("/login")
+def login(username: str = Form(...), password: str = Form(...)):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, display_name FROM users WHERE id=?", (user_id,))
+    c.execute("SELECT id FROM users WHERE username=? AND password=?", (username, password))
     row = c.fetchone()
     conn.close()
-    if not row:
-        return JSONResponse({"error":"User not found"}, status_code=404)
-    return {"id": row[0], "display_name": row[1]}
+    if row:
+        return {"status": "ok", "user_id": row[0]}
+    return {"status": "error", "msg": "Invalid credentials"}
 
-# --- Отправка текста ---
-@app.post("/send")
-async def send(req: Request):
-    data = await req.json()
-    sender = data.get("sender")
-    recipient = data.get("recipient")
-    text = data.get("text")
-    if not (sender and recipient and text):
-        return JSONResponse({"error":"Missing fields"}, status_code=400)
+# ----------- Сообщения ----------
+@app.post("/send_message")
+def send_message(sender: str = Form(...), receiver: str = Form(...), content: str = Form(...)):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text) VALUES (?, ?, ?)", (sender, recipient, text))
+    mid = str(uuid.uuid4())
+    c.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", (mid, sender, receiver, "text", content))
     conn.commit()
     conn.close()
-    return {"status":"ok"}
+    return {"status": "ok"}
 
-# --- Отправка файла ---
 @app.post("/send_file")
-async def send_file(sender: str = Form(...), recipient: str = Form(...), file: UploadFile = File(...)):
-    ext = os.path.splitext(file.filename)[1]
-    filename = f"{uuid.uuid4()}{ext}"
-    path = os.path.join(MEDIA_DIR, filename)
-    with open(path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+def send_file(sender: str = Form(...), receiver: str = Form(...), file: UploadFile = File(...)):
+    ext = file.filename.split(".")[-1]
+    fname = f"data/{uuid.uuid4()}.{ext}"
+    with open(fname, "wb") as f:
+        f.write(file.file.read())
+
+    ftype = "video" if ext.lower() in ["mp4", "webm", "avi"] else "image"
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text) VALUES (?, ?, ?)",
-              (sender, recipient, f"[file]{filename}"))
+    mid = str(uuid.uuid4())
+    c.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", (mid, sender, receiver, ftype, fname))
     conn.commit()
     conn.close()
-    return {"status":"ok","filename":filename}
+    return {"status": "ok", "file": fname}
 
-# --- Inbox ---
 @app.get("/inbox/{user_id}")
-async def inbox(user_id: str):
+def inbox(user_id: str):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT sender, recipient, text FROM messages WHERE sender=? OR recipient=? ORDER BY id ASC", (user_id, user_id))
+    c.execute("SELECT sender, type, content FROM messages WHERE receiver=?", (user_id,))
     rows = c.fetchall()
     conn.close()
-    return [{"sender": r[0], "recipient": r[1], "text": r[2]} for r in rows]
+    return [{"sender": r[0], "type": r[1], "content": r[2]} for r in rows]
 
-# --- Сброс базы ---
-@app.post("/reset")
-async def reset(password: str):
-    if password != RESET_PASSWORD:
-        return JSONResponse({"error":"Wrong password"}, status_code=403)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM users")
-    c.execute("DELETE FROM messages")
-    conn.commit()
-    conn.close()
-    return {"status":"reset done"}
+@app.get("/file/{path}")
+def get_file(path: str):
+    return FileResponse(path)
+
+# ----------- WebRTC Сигнализация ----------
+connections = {}
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+    connections[user_id] = websocket
+    try:
+        while True:
+            data = await websocket.receive_json()
+            target_id = data.get("to")
+            if target_id in connections:
+                await connections[target_id].send_json({**data, "from": user_id})
+    except WebSocketDisconnect:
+        del connections[user_id]
+
+# ----------- Статические файлы ----------
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+def index():
+    return HTMLResponse(open("static/index.html", "r", encoding="utf-8").read())
