@@ -32,34 +32,39 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
   <div id="chat">
     <div id="messages"></div>
     <form id="inputForm" class="hidden">
-      <input id="messageInput" type="text" placeholder="Type..."/>
+      <input id="messageInput" type="text" placeholder="Type..." autocomplete="off"/>
       <input id="fileInput" type="file"/>
-      <button>Send</button>
+      <button type="submit">Send</button>
     </form>
   </div>
 </div>
 
-<!-- Forms -->
 <div id="loginForm" class="hidden">
   <h3>Login</h3>
-  <input id="loginName" placeholder="Login"><br>
-  <input id="loginPass" type="password" placeholder="Password"><br>
-  <button onclick="doLogin()">Login</button>
-  <button onclick="showRegister()">Register</button>
+  <form id="loginFormInner">
+    <input id="loginName" placeholder="Login" required><br>
+    <input id="loginPass" type="password" placeholder="Password" required><br>
+    <button type="submit">Login</button>
+    <button type="button" onclick="showRegister()">Register</button>
+  </form>
 </div>
 
 <div id="registerForm" class="hidden">
   <h3>Register</h3>
-  <input id="regName" placeholder="Login"><br>
-  <input id="regPass" type="password" placeholder="Password"><br>
-  <button onclick="doRegister()">Register</button>
-  <button onclick="showLogin()">Back</button>
+  <form id="registerFormInner">
+    <input id="regName" placeholder="Login" required><br>
+    <input id="regPass" type="password" placeholder="Password" required><br>
+    <button type="submit">Register</button>
+    <button type="button" onclick="showLogin()">Back</button>
+  </form>
 </div>
 
 <div id="adminForm" class="hidden">
   <h3>Admin</h3>
-  <input id="adminPwd" type="password" placeholder="Password"><br>
-  <button onclick="adminLogin()">Enter</button>
+  <form id="adminFormInner">
+    <input id="adminPwd" type="password" placeholder="Password" required><br>
+    <button type="submit">Enter</button>
+  </form>
 </div>
 
 <script>
@@ -73,43 +78,81 @@ function showRegister(){ hideAll(); document.getElementById("registerForm").clas
 function showAdmin(){ hideAll(); document.getElementById("adminForm").classList.remove("hidden"); }
 function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>e.classList.add("hidden")); }
 
+// Event listeners for forms
+document.getElementById("loginFormInner").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await doLogin();
+});
+
+document.getElementById("registerFormInner").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await doRegister();
+});
+
+document.getElementById("adminFormInner").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await adminLogin();
+});
+
 // Login/Register
 async function doLogin(){
-  const login=document.getElementById("loginName").value;
-  const pass=document.getElementById("loginPass").value;
-  const r=await fetch(SERVER+"/login",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({login,password:pass})
-  });
-  const d=await r.json();
-  if(d.error){
-    alert(d.error);
-  } else {
-    currentUser=d;
-    document.getElementById("userInfo").textContent="Logged as "+d.username;
-    document.getElementById("inputForm").classList.remove("hidden");
-    document.getElementById("logoutBtn").classList.remove("hidden");
-    hideAll();
-    loadMessages();
+  const username=document.getElementById("loginName").value;
+  const password=document.getElementById("loginPass").value;
+
+  const formData = new FormData();
+  formData.append("username", username);
+  formData.append("password", password);
+
+  try {
+    const r=await fetch(SERVER+"/login",{
+        method:"POST",
+        body: formData
+    });
+    const d=await r.json();
+    if(d.error){
+      alert("Login failed: "+d.error);
+    } else {
+      currentUser=d;
+      document.getElementById("userInfo").textContent="Logged as "+d.username;
+document.getElementById("inputForm").classList.remove("hidden");
+      document.getElementById("logoutBtn").classList.remove("hidden");
+      document.getElementById("loginBtn").classList.add("hidden");
+      hideAll();
+      loadMessages();
+    }
+  } catch (e) {
+    alert("An error occurred. Please try again.");
   }
 }
 
-
 async function doRegister(){
-  const login=document.getElementById("regName").value;
-  const pass=document.getElementById("regPass").value;
-  const r=await fetch(SERVER+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login,password:pass})});
-  const d=await r.json();
-  if(d.error){alert(d.error);}else{alert("Registered, now login"); showLogin();}
+  const username=document.getElementById("regName").value;
+  const password=document.getElementById("regPass").value;
+
+  const formData = new FormData();
+  formData.append("username", username);
+  formData.append("password", password);
+
+  try {
+    const r=await fetch(SERVER+"/register",{method:"POST",body:formData});
+    const d=await r.json();
+    if(d.error){
+      alert("Registration failed: "+d.error);
+    } else {
+      alert("Registered, now login");
+      showLogin();
+    }
+  } catch (e) {
+    alert("An error occurred. Please try again.");
+  }
 }
 
 async function doLogout(){
-  await fetch(SERVER+"/logout",{method:"POST"});
   currentUser=null;
   document.getElementById("userInfo").textContent="Not logged in";
   document.getElementById("inputForm").classList.add("hidden");
   document.getElementById("logoutBtn").classList.add("hidden");
+  document.getElementById("loginBtn").classList.remove("hidden");
   showLogin();
 }
 
@@ -133,30 +176,48 @@ document.getElementById("inputForm").onsubmit=async e=>{
   e.preventDefault();
   const msg=document.getElementById("messageInput").value;
   if(!msg.trim()) return;
-  await fetch(SERVER+"/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({recipient:"all",text:msg})});
+  const formData = new FormData();
+  formData.append("recipient", "all");
+  formData.append("text", msg);
+  await fetch(SERVER+"/send",{method:"POST",body:formData});
   document.getElementById("messageInput").value="";
   loadMessages();
 };
 
 // Admin
 async function adminLogin(){
-  const pwd=document.getElementById("adminPwd").value;
-  const r=await fetch(SERVER+"/admin_login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
-  const d=await r.json();
-  if(d.error){alert(d.error);}else{ loadAdmin(); }
+  const password=document.getElementById("adminPwd").value;
+  const formData = new FormData();
+  formData.append("password", password);
+  try {
+    const r=await fetch(SERVER+"/admin/login",{method:"POST",body:formData});
+    const d=await r.json();
+    if(d.error){
+      alert("Admin login failed: "+d.error);
+    } else {
+      loadAdmin();
+    }
+  } catch (e) {
+    alert("An error occurred. Please try again.");
+  }
 }
 
 async function loadAdmin(){
-  const r=await fetch(SERVER+"/admin_panel");
+  const password=document.getElementById("adminPwd").value;
+  const r=await fetch(SERVER+"/admin/users?password="+encodeURIComponent(password));
   const d=await r.json();
   if(d.error){alert(d.error);return;}
   let html="<h3>Admin Panel</h3><button onclick='resetDB()'>Reset DB</button><ul>";
-  for(const u in d.users){ html+=`<li>${u} / ${d.users[u].password}</li>`; }
+  for(const u of d.users){ html+=<li>${u.username}</li>; } // Only display usernames
   html+="</ul>";
   document.getElementById("adminForm").innerHTML=html;
 }
+
 async function resetDB(){
-  const r=await fetch(SERVER+"/admin_reset",{method:"POST"});
+  const password = document.getElementById("adminPwd").value;
+  const formData = new FormData();
+  formData.append("password", password);
+  const r=await fetch(SERVER+"/admin/reset",{method:"POST",body:formData});
   const d=await r.json();
   alert(JSON.stringify(d));
   loadAdmin();
