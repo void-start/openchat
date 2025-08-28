@@ -2,256 +2,165 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HackerChat Web</title>
+<title>HackerChat</title>
 <style>
 body { margin:0; font-family:monospace; background:black; color:#0f0;}
-#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between; align-items:center;}
+#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between;}
 #container { display:flex; height:calc(100vh - 40px);}
-#users { width:250px; background:#010; overflow-y:auto; border-right:1px solid #0f0; padding:5px;}
+#users { width:200px; background:#010; border-right:1px solid #0f0; overflow-y:auto;}
 #chat { flex:1; display:flex; flex-direction:column;}
 #messages { flex:1; padding:10px; overflow-y:auto;}
 #inputForm { display:flex; border-top:1px solid #0f0;}
-#inputForm input[type="text"] { flex:1; background:black; color:#0f0; border:none; padding:10px;}
-#inputForm input[type="file"] { background:#020; color:#0f0; border:1px solid #0f0; margin-left:5px; cursor:pointer;}
-#inputForm button { background:#0f0; color:black; border:none; padding:10px 15px; cursor:pointer;}
-.user-item { padding:5px; cursor:pointer;}
-.user-item:hover { background:#020; }
-.user-item.active { background:#050; }
-#addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
-#loginForm { padding:20px; background:#010; border:1px solid #0f0; width:300px; margin:100px auto; }
-#loginForm input { width:100%; padding:5px; margin:5px 0; background:black; color:#0f0; border:1px solid #0f0;}
-#loginForm button { width:100%; padding:5px; margin-top:10px; background:#0f0; color:black; cursor:pointer; border:none;}
-#adminPanel { display:none; background:#111; color:#0f0; padding:10px; border-top:1px solid #0f0;}
-#adminPanel h3, #adminPanel h4 { margin:5px 0; }
-#resetDbBtn { background:#0f0; color:black; border:none; padding:5px 10px; cursor:pointer; }
+#inputForm input, #inputForm button { background:black; color:#0f0; border:1px solid #0f0; padding:5px; }
+#loginForm, #registerForm, #adminForm { padding:20px; }
+.hidden { display:none; }
 </style>
 </head>
 <body>
 
-<div id="header" style="display:none;">
-    <span>Your ID: <span id="myId">loading...</span></span>
-    <div>
-        <button id="adminBtn">[ Admin Panel ]</button>
-    </div>
-</div>
-
-<div id="container" style="display:none;">
-    <div id="users">
-        <div id="addContactBtn">+ Add Contact</div>
-    </div>
-    <div id="chat">
-        <div id="messages"></div>
-        <form id="inputForm">
-            <input id="messageInput" type="text" autocomplete="off" placeholder="Type a message"/>
-            <input id="fileInput" type="file"/>
-            <button>Send</button>
-        </form>
-    </div>
-</div>
-
-<div id="loginForm">
-    <h3>Login / Register</h3>
-    <input id="username" placeholder="Username"/>
-    <input id="password" type="password" placeholder="Password"/>
+<div id="header">
+  <span id="userInfo">Not logged in</span>
+  <div>
     <button id="loginBtn">Login</button>
-    <button id="registerBtn">Register</button>
+    <button id="adminBtn">Admin</button>
+    <button id="logoutBtn" class="hidden">Logout</button>
+  </div>
 </div>
 
-<div id="adminPanel">
-    <h3>Admin Panel</h3>
-    <button id="resetDbBtn">Reset DB</button>
-    <h4>Registered Users:</h4>
-    <div id="usersList"></div>
+<div id="container">
+  <div id="users"></div>
+  <div id="chat">
+    <div id="messages"></div>
+    <form id="inputForm" class="hidden">
+      <input id="messageInput" type="text" placeholder="Type..."/>
+      <input id="fileInput" type="file"/>
+      <button>Send</button>
+    </form>
+  </div>
+</div>
+
+<!-- Forms -->
+<div id="loginForm" class="hidden">
+  <h3>Login</h3>
+  <input id="loginName" placeholder="Login"><br>
+  <input id="loginPass" type="password" placeholder="Password"><br>
+  <button onclick="doLogin()">Login</button>
+  <button onclick="showRegister()">Register</button>
+</div>
+
+<div id="registerForm" class="hidden">
+  <h3>Register</h3>
+  <input id="regName" placeholder="Login"><br>
+  <input id="regPass" type="password" placeholder="Password"><br>
+  <button onclick="doRegister()">Register</button>
+  <button onclick="showLogin()">Back</button>
+</div>
+
+<div id="adminForm" class="hidden">
+  <h3>Admin</h3>
+  <input id="adminPwd" type="password" placeholder="Password"><br>
+  <button onclick="adminLogin()">Enter</button>
 </div>
 
 <script>
 const SERVER = window.location.origin;
-let userId = localStorage.getItem("userId");
-let username = localStorage.getItem("username");
-let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
+let currentUser = null;
 let selectedUser = null;
 
-// --- Login/Register ---
-async function loginUser() {
-    const uname = document.getElementById("username").value.trim();
-    const pwd = document.getElementById("password").value.trim();
-    if(!uname || !pwd){ alert("Enter username & password"); return; }
-    const resp = await fetch(SERVER+"/login", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({username:uname, password:pwd})
-    });
-    const data = await resp.json();
-    if(data.error){ alert(data.error); return; }
-    userId = data.user_id;
-    username = data.username;
-    localStorage.setItem("userId", userId);
-    localStorage.setItem("username", username);
-    afterLogin();
-}
+// UI control
+function showLogin(){ hideAll(); document.getElementById("loginForm").classList.remove("hidden"); }
+function showRegister(){ hideAll(); document.getElementById("registerForm").classList.remove("hidden"); }
+function showAdmin(){ hideAll(); document.getElementById("adminForm").classList.remove("hidden"); }
+function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>e.classList.add("hidden")); }
 
-async function registerUser() {
-    const uname = document.getElementById("username").value.trim();
-    const pwd = document.getElementById("password").value.trim();
-    if(!uname || !pwd){ alert("Enter username & password"); return; }
-    const resp = await fetch(SERVER+"/register", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({username:uname, password:pwd})
-    });
-    const data = await resp.json();
-    if(data.error){ alert(data.error); return; }
-    userId = data.user_id;
-    username = data.username;
-    localStorage.setItem("userId", userId);
-    localStorage.setItem("username", username);
-    afterLogin();
-}
-
-function afterLogin(){
-    document.getElementById("loginForm").style.display="none";
-    document.getElementById("header").style.display="flex";
-    document.getElementById("container").style.display="flex";
-    document.getElementById("myId").textContent = userId;
-    renderContacts();
-    setInterval(loadMessages, 2000);
-}
-
-// --- Contacts ---
-async function addContact() {
-    const newId = prompt("Enter user ID:");
-    if(!newId) return;
-    if(!contacts.find(c => c.id===newId)){
-        contacts.push({id:newId, username:newId.substring(0,6)});
-        localStorage.setItem("contacts", JSON.stringify(contacts));
-    }
-    renderContacts();
-}
-
-function renderContacts(){
-    const usersDiv = document.getElementById("users");
-    usersDiv.innerHTML = '<div id="addContactBtn">+ Add Contact</div>';
-    document.getElementById("addContactBtn").onclick = addContact;
-    contacts.forEach(u=>{
-        const div = document.createElement("div");
-        div.textContent = u.username;
-        div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active" : "");
-        div.onclick = ()=>{
-            selectedUser = u;
-            renderContacts();
-            loadMessages();
-        };
-        usersDiv.appendChild(div);
-    });
-}
-
-// --- Load messages ---
-async function loadMessages(){
-    if(!selectedUser) return;
-    const resp = await fetch(`${SERVER}/inbox/${userId}`);
-    const msgs = await resp.json();
-    const chatDiv = document.getElementById("messages");
-    chatDiv.innerHTML = "";
-    msgs.forEach(m=>{
-        if((m.sender===selectedUser.id && m.recipient===userId) || 
-           (m.sender===userId && m.recipient===selectedUser.id)){
-            const wrapper = document.createElement("div");
-            wrapper.style.margin = "5px 0";
-            if(m.text.startsWith("[file]")){
-                const filename = m.text.replace("[file]","");
-                const ext = filename.split('.').pop().toLowerCase();
-                if(["jpg","jpeg","png","gif","webp"].includes(ext)){
-                    const img = document.createElement("img");
-                    img.src = SERVER+"/media/"+filename;
-                    img.style.maxWidth="200px";
-                    wrapper.appendChild(img);
-                } else {
-                    const a = document.createElement("a");
-                    a.href = SERVER+"/media/"+filename;
-                    a.textContent = "📎 "+filename;
-                    a.target="_blank";
-                    wrapper.appendChild(a);
-                }
-            } else {
-                wrapper.textContent = (m.sender===userId?"Me":selectedUser.username)+": "+m.text;
-            }
-            chatDiv.appendChild(wrapper);
-        }
-    });
-    chatDiv.scrollTop = chatDiv.scrollHeight;
-}
-
-// --- Send message ---
-document.getElementById("inputForm").onsubmit = async function(e){
-    e.preventDefault();
-    if(!selectedUser) { alert("Select a user first"); return; }
-
-    const msg = document.getElementById("messageInput").value;
-    const file = document.getElementById("fileInput").files[0];
-
-    if(file){
-        const formData = new FormData();
-        formData.append("sender", userId);
-        formData.append("recipient", selectedUser.id);
-        formData.append("file", file);
-        await fetch(SERVER+"/send_file", { method:"POST", body:formData });
-        document.getElementById("fileInput").value="";
-    }
-    if(msg.trim()){
-        await fetch(SERVER+"/send", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({sender:userId, recipient:selectedUser.id, text:msg})
-        });
-        document.getElementById("messageInput").value="";
-    }
+// Login/Register
+async function doLogin(){
+  const login=document.getElementById("loginName").value;
+  const pass=document.getElementById("loginPass").value;
+  const r=await fetch(SERVER+"/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login,password:pass})});
+  const d=await r.json();
+  if(d.error){alert(d.error);}else{
+    currentUser=d;
+    document.getElementById("userInfo").textContent="Logged as "+d.login;
+    document.getElementById("inputForm").classList.remove("hidden");
+    document.getElementById("logoutBtn").classList.remove("hidden");
+    hideAll();
     loadMessages();
+  }
 }
 
-// --- Admin Panel ---
-document.getElementById("adminBtn").onclick = async function(){
-    const pwd = prompt("Enter admin password:");
-    if(!pwd) return;
+async function doRegister(){
+  const login=document.getElementById("regName").value;
+  const pass=document.getElementById("regPass").value;
+  const r=await fetch(SERVER+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login,password:pass})});
+  const d=await r.json();
+  if(d.error){alert(d.error);}else{alert("Registered, now login"); showLogin();}
+}
 
-    const resp = await fetch(`${SERVER}/admin/login`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ password: pwd })
-    });
-    const data = await resp.json();
-    if(data.error){ alert(data.error); return; }
+async function doLogout(){
+  await fetch(SERVER+"/logout",{method:"POST"});
+  currentUser=null;
+  document.getElementById("userInfo").textContent="Not logged in";
+  document.getElementById("inputForm").classList.add("hidden");
+  document.getElementById("logoutBtn").classList.add("hidden");
+  showLogin();
+}
 
-    document.getElementById("adminPanel").style.display="block";
+// Messages
+async function loadMessages(){
+  if(!currentUser) return;
+  const r=await fetch(SERVER+"/inbox");
+  const msgs=await r.json();
+  const box=document.getElementById("messages");
+  box.innerHTML="";
+  msgs.forEach(m=>{
+    const div=document.createElement("div");
+    div.textContent=(m.sender===currentUser.user_id?"Me":"Other")+": "+m.text;
+    box.appendChild(div);
+  });
+  box.scrollTop=box.scrollHeight;
+}
+setInterval(loadMessages,2000);
 
-    document.getElementById("resetDbBtn").onclick = async ()=>{
-        if(!confirm("Really reset DB?")) return;
-        const r = await fetch(`${SERVER}/admin/reset`, {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ password: pwd })
-        });
-        alert(await r.text());
-    };
-
-    const resp2 = await fetch(`${SERVER}/admin/users?password=${pwd}`);
-    const users = await resp2.json();
-    const listDiv = document.getElementById("usersList");
-    listDiv.innerHTML = "";
-    users.forEach(u=>{
-        const div = document.createElement("div");
-        div.textContent = u.username + " | " + u.password_hash;
-        listDiv.appendChild(div);
-    });
+document.getElementById("inputForm").onsubmit=async e=>{
+  e.preventDefault();
+  const msg=document.getElementById("messageInput").value;
+  if(!msg.trim()) return;
+  await fetch(SERVER+"/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({recipient:"all",text:msg})});
+  document.getElementById("messageInput").value="";
+  loadMessages();
 };
 
-// --- Bind buttons ---
-document.getElementById("loginBtn").onclick = loginUser;
-document.getElementById("registerBtn").onclick = registerUser;
-
-// --- Init ---
-if(userId && username){
-    afterLogin();
+// Admin
+async function adminLogin(){
+  const pwd=document.getElementById("adminPwd").value;
+  const r=await fetch(SERVER+"/admin_login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
+  const d=await r.json();
+  if(d.error){alert(d.error);}else{ loadAdmin(); }
 }
+
+async function loadAdmin(){
+  const r=await fetch(SERVER+"/admin_panel");
+  const d=await r.json();
+  if(d.error){alert(d.error);return;}
+  let html="<h3>Admin Panel</h3><button onclick='resetDB()'>Reset DB</button><ul>";
+  for(const u in d.users){ html+=`<li>${u} / ${d.users[u].password}</li>`; }
+  html+="</ul>";
+  document.getElementById("adminForm").innerHTML=html;
+}
+async function resetDB(){
+  const r=await fetch(SERVER+"/admin_reset",{method:"POST"});
+  const d=await r.json();
+  alert(JSON.stringify(d));
+  loadAdmin();
+}
+
+// Buttons
+document.getElementById("loginBtn").onclick=showLogin;
+document.getElementById("adminBtn").onclick=showAdmin;
+document.getElementById("logoutBtn").onclick=doLogout;
+
+showLogin();
 </script>
 </body>
 </html>

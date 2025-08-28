@@ -1,198 +1,144 @@
-from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-import sqlite3
-import uuid
-import os
-import shutil
-import hashlib
+from flask import Flask, request, jsonify, send_from_directory, session, redirect
+from flask_cors import CORS
+from flask_session import Session
+import os, uuid
 
-app = FastAPI()
+app = Flask(__name__)
+CORS(app)
 
-# --- Конфигурация ---
-DB_FILE = "db.sqlite"
-ADMIN_PASSWORD = "admin123"   # пароль админки
-STATIC_DIR = "static"
-INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
+# --- Настройки сессий ---
+app.secret_key = "super_secret_key"
+app.config["SESSION_TYPE"] = "filesystem"
+Session(app)
+
+# --- БД в памяти ---
+USERS = {}       # login -> {"password": "...", "id": "..."}
+MESSAGES = []    # {sender, recipient, text}
 MEDIA_DIR = "media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
-# --- Статика ---
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
+ADMIN_PASSWORD = "admin123"  # пароль админки
 
-# --- Инициализация БД ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        password_hash TEXT
-    )
-    """)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sender TEXT,
-        recipient TEXT,
-        text TEXT,
-        created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
-    conn.commit()
-    conn.close()
 
-init_db()
+# --- Helpers ---
+def current_user():
+    uid = session.get("user_id")
+    for u, data in USERS.items():
+        if data["id"] == uid:
+            return u, data
+    return None, None
 
-# --- Утилиты ---
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
 
-# --- Корень ---
-@app.get("/")
-async def root():
-    return FileResponse(INDEX_FILE)
-
-# --- Регистрация ---
-@app.post("/register")
-async def register(req: Request):
-    data = await req.json()
-    username = data.get("username")
+# --- Маршруты авторизации ---
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.json
+    login = data.get("login")
     password = data.get("password")
 
-    if not username or not password:
-        return JSONResponse({"error": "Missing fields"}, status_code=400)
+    if not login or not password:
+        return jsonify({"error": "Missing login/password"}), 400
+    if login in USERS:
+        return jsonify({"error": "User exists"}), 400
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        user_id = str(uuid.uuid4())
-        c.execute("INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)",
-                  (user_id, username, hash_password(password)))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        return JSONResponse({"error": "Username already exists"}, status_code=400)
+    uid = str(uuid.uuid4())[:8]
+    USERS[login] = {"password": password, "id": uid}
+    session["user_id"] = uid
+    return jsonify({"status": "registered", "user_id": uid, "login": login})
 
-    conn.close()
-    return {"user_id": user_id, "username": username}
 
-# --- Логин ---
-@app.post("/login")
-async def login(req: Request):
-    data = await req.json()
-    username = data.get("username")
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json
+    login = data.get("login")
     password = data.get("password")
 
-    if not username or not password:
-        return JSONResponse({"error": "Missing fields"}, status_code=400)
+    if login not in USERS or USERS[login]["password"] != password:
+        return jsonify({"error": "Invalid login/password"}), 403
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, password_hash FROM users WHERE username=?", (username,))
-    row = c.fetchone()
-    conn.close()
+    session["user_id"] = USERS[login]["id"]
+    return jsonify({"status": "logged_in", "user_id": USERS[login]["id"], "login": login})
 
-    if not row or row[1] != hash_password(password):
-        return JSONResponse({"error": "Invalid username or password"}, status_code=403)
 
-    return {"user_id": row[0], "username": username}
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"status": "logged_out"})
 
-# --- Получить пользователя ---
-@app.get("/user/{user_id}")
-async def get_user(user_id: str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE id=?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return JSONResponse({"error": "User not found"}, status_code=404)
-    return {"id": row[0], "username": row[1]}
 
-# --- Отправка текста ---
-@app.post("/send")
-async def send(req: Request):
-    data = await req.json()
-    sender = data.get("sender")
-    recipient = data.get("recipient")
-    text = data.get("text")
-    if not (sender and recipient and text):
-        return JSONResponse({"error": "Missing fields"}, status_code=400)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text) VALUES (?, ?, ?)", (sender, recipient, text))
-    conn.commit()
-    conn.close()
-    return {"status": "ok"}
+# --- Чат ---
+@app.route("/send", methods=["POST"])
+def send_msg():
+    user, data = current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 403
 
-# --- Отправка файла ---
-@app.post("/send_file")
-async def send_file(sender: str = Form(...), recipient: str = Form(...), file: UploadFile = File(...)):
-    ext = os.path.splitext(file.filename)[1]
-    filename = f"{uuid.uuid4()}{ext}"
+    body = request.json
+    recipient = body.get("recipient")
+    text = body.get("text", "")
+    if not recipient:
+        return jsonify({"error": "No recipient"}), 400
+
+    MESSAGES.append({"sender": data["id"], "recipient": recipient, "text": text})
+    return jsonify({"status": "sent"})
+
+
+@app.route("/send_file", methods=["POST"])
+def send_file():
+    user, data = current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    file = request.files["file"]
+    recipient = request.form["recipient"]
+    filename = str(uuid.uuid4()) + "_" + file.filename
     path = os.path.join(MEDIA_DIR, filename)
-    with open(path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text) VALUES (?, ?, ?)",
-              (sender, recipient, f"[file]{filename}"))
-    conn.commit()
-    conn.close()
-    return {"status": "ok", "filename": filename}
+    file.save(path)
+    MESSAGES.append({"sender": data["id"], "recipient": recipient, "text": "[file]" + filename})
+    return jsonify({"status": "file_sent", "filename": filename})
 
-# --- Inbox ---
-@app.get("/inbox/{user_id}")
-async def inbox(user_id: str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-        SELECT sender, recipient, text, created_at 
-        FROM messages 
-        WHERE sender=? OR recipient=? 
-        ORDER BY id ASC
-    """, (user_id, user_id))
-    rows = c.fetchall()
-    conn.close()
-    return [{"sender": r[0], "recipient": r[1], "text": r[2], "created_at": r[3]} for r in rows]
 
-# --- Админка: вход ---
-@app.post("/admin/login")
-async def admin_login(req: Request):
-    data = await req.json()
-    password = data.get("password")
-    if password != ADMIN_PASSWORD:
-        return JSONResponse({"error": "Wrong admin password"}, status_code=403)
-    return {"status": "ok"}
+@app.route("/media/<path:fname>")
+def media(fname):
+    return send_from_directory(MEDIA_DIR, fname)
 
-# --- Админка: список пользователей ---
-@app.get("/admin/users")
-async def admin_users(password: str):
-    if password != ADMIN_PASSWORD:
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT username, password_hash FROM users ORDER BY username ASC")
-    rows = c.fetchall()
-    conn.close()
-    return [{"username": r[0], "password_hash": r[1]} for r in rows]
+@app.route("/inbox")
+def inbox():
+    user, data = current_user()
+    if not user:
+        return jsonify([])
 
-# --- Админка: сброс ---
-@app.post("/admin/reset")
-async def admin_reset(req: Request):
-    data = await req.json()
-    password = data.get("password")
-    if password != ADMIN_PASSWORD:
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    uid = data["id"]
+    msgs = [m for m in MESSAGES if m["sender"] == uid or m["recipient"] == uid]
+    return jsonify(msgs)
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM users")
-    c.execute("DELETE FROM messages")
-    conn.commit()
-    conn.close()
-    return {"status": "reset done"}
+
+# --- Админка ---
+@app.route("/admin_login", methods=["POST"])
+def admin_login():
+    pwd = request.json.get("password")
+    if pwd == ADMIN_PASSWORD:
+        session["is_admin"] = True
+        return jsonify({"status": "ok"})
+    return jsonify({"error": "wrong password"}), 403
+
+
+@app.route("/admin_panel")
+def admin_panel():
+    if not session.get("is_admin"):
+        return jsonify({"error": "not admin"}), 403
+    return jsonify({"users": USERS, "messages_count": len(MESSAGES)})
+
+
+@app.route("/admin_reset", methods=["POST"])
+def admin_reset():
+    if not session.get("is_admin"):
+        return jsonify({"error": "not admin"}), 403
+    USERS.clear()
+    MESSAGES.clear()
+    return jsonify({"status": "reset"})
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
