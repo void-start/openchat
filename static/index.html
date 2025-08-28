@@ -1,135 +1,166 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Auth System</title>
-  <style>
-    body { font-family: sans-serif; margin: 40px; }
-    .hidden { display: none; }
-    button { margin: 5px; }
-    input { margin: 5px; }
-    .panel { border: 1px solid #ccc; padding: 15px; margin-top: 20px; }
-  </style>
+<meta charset="UTF-8">
+<title>HackerChat</title>
+<style>
+body { margin:0; font-family:monospace; background:black; color:#0f0;}
+#header { padding:10px; border-bottom:1px solid #0f0; background:#010; display:flex; justify-content:space-between;}
+#container { display:flex; height:calc(100vh - 40px);}
+#users { width:200px; background:#010; border-right:1px solid #0f0; overflow-y:auto;}
+#chat { flex:1; display:flex; flex-direction:column;}
+#messages { flex:1; padding:10px; overflow-y:auto;}
+#inputForm { display:flex; border-top:1px solid #0f0;}
+#inputForm input, #inputForm button { background:black; color:#0f0; border:1px solid #0f0; padding:5px; }
+#loginForm, #registerForm, #adminForm { padding:20px; }
+.hidden { display:none; }
+</style>
 </head>
 <body>
-  <h1>Auth System</h1>
 
-  <!-- Main menu -->
-  <div id="menu">
-    <button onclick="show('registerForm')">Register</button>
-    <button onclick="show('loginForm')">Login</button>
-    <button onclick="show('adminLoginForm')">Admin Panel</button>
+<div id="header">
+  <span id="userInfo">Not logged in</span>
+  <div>
+    <button id="loginBtn">Login</button>
+    <button id="adminBtn">Admin</button>
+    <button id="logoutBtn" class="hidden">Logout</button>
   </div>
+</div>
 
-  <!-- Register -->
-  <div id="registerForm" class="hidden panel">
-    <h3>Register</h3>
-    <input id="regUser" placeholder="Username"><br>
-    <input id="regPass" type="password" placeholder="Password"><br>
-    <button onclick="register()">Submit</button>
-    <button onclick="backToMenu()">Back</button>
-    <p id="regMsg"></p>
+<div id="container">
+  <div id="users"></div>
+  <div id="chat">
+    <div id="messages"></div>
+    <form id="inputForm" class="hidden">
+      <input id="messageInput" type="text" placeholder="Type..."/>
+      <input id="fileInput" type="file"/>
+      <button>Send</button>
+    </form>
   </div>
+</div>
 
-  <!-- Login -->
-  <div id="loginForm" class="hidden panel">
-    <h3>Login</h3>
-    <input id="logUser" placeholder="Username"><br>
-    <input id="logPass" type="password" placeholder="Password"><br>
-    <button onclick="login()">Submit</button>
-    <button onclick="backToMenu()">Back</button>
-    <p id="logMsg"></p>
-  </div>
+<!-- Forms -->
+<div id="loginForm" class="hidden">
+  <h3>Login</h3>
+  <input id="loginName" placeholder="Login"><br>
+  <input id="loginPass" type="password" placeholder="Password"><br>
+  <button onclick="doLogin()">Login</button>
+  <button onclick="showRegister()">Register</button>
+</div>
 
-  <!-- Admin login -->
-  <div id="adminLoginForm" class="hidden panel">
-    <h3>Admin Login</h3>
-    <input id="admPass" type="password" placeholder="Admin password"><br>
-    <button onclick="adminLogin()">Enter</button>
-    <button onclick="backToMenu()">Back</button>
-    <p id="admMsg"></p>
-  </div>
+<div id="registerForm" class="hidden">
+  <h3>Register</h3>
+  <input id="regName" placeholder="Login"><br>
+  <input id="regPass" type="password" placeholder="Password"><br>
+  <button onclick="doRegister()">Register</button>
+  <button onclick="showLogin()">Back</button>
+</div>
 
-  <!-- Admin panel -->
-  <div id="adminPanel" class="hidden panel">
-    <h3>Admin Panel</h3>
-    <button onclick="listUsers()">List Users</button>
-    <button onclick="resetDB()">Reset DB</button>
-    <button onclick="backToMenu()">Logout</button>
-    <div id="usersList"></div>
-  </div>
+<div id="adminForm" class="hidden">
+  <h3>Admin</h3>
+  <input id="adminPwd" type="password" placeholder="Password"><br>
+  <button onclick="adminLogin()">Enter</button>
+</div>
 
-  <script>
-    let adminPassword = null;
+<script>
+const SERVER = window.location.origin;
+let currentUser = null;
+let selectedUser = null;
 
-    function show(id) {
-      document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
-      document.getElementById(id).classList.remove('hidden');
-      document.getElementById('menu').classList.add('hidden');
-    }
+// UI control
+function showLogin(){ hideAll(); document.getElementById("loginForm").classList.remove("hidden"); }
+function showRegister(){ hideAll(); document.getElementById("registerForm").classList.remove("hidden"); }
+function showAdmin(){ hideAll(); document.getElementById("adminForm").classList.remove("hidden"); }
+function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>e.classList.add("hidden")); }
 
-    function backToMenu() {
-      document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
-      document.getElementById('menu').classList.remove('hidden');
-      adminPassword = null;
-    }
+// Login/Register
+async function doLogin(){
+  const login=document.getElementById("loginName").value;
+  const pass=document.getElementById("loginPass").value;
+  const r=await fetch(SERVER+"/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login,password:pass})});
+  const d=await r.json();
+  if(d.error){alert(d.error);}else{
+    currentUser=d;
+    document.getElementById("userInfo").textContent="Logged as "+d.login;
+    document.getElementById("inputForm").classList.remove("hidden");
+    document.getElementById("logoutBtn").classList.remove("hidden");
+    hideAll();
+    loadMessages();
+  }
+}
 
-    async function register() {
-      const u = document.getElementById("regUser").value;
-      const p = document.getElementById("regPass").value;
-      let form = new FormData();
-      form.append("username", u);
-      form.append("password", p);
+async function doRegister(){
+  const login=document.getElementById("regName").value;
+  const pass=document.getElementById("regPass").value;
+  const r=await fetch(SERVER+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login,password:pass})});
+  const d=await r.json();
+  if(d.error){alert(d.error);}else{alert("Registered, now login"); showLogin();}
+}
 
-      const res = await fetch("/register", { method:"POST", body: form });
-      const data = await res.json();
-      document.getElementById("regMsg").innerText = JSON.stringify(data);
-    }
+async function doLogout(){
+  await fetch(SERVER+"/logout",{method:"POST"});
+  currentUser=null;
+  document.getElementById("userInfo").textContent="Not logged in";
+  document.getElementById("inputForm").classList.add("hidden");
+  document.getElementById("logoutBtn").classList.add("hidden");
+  showLogin();
+}
 
-    async function login() {
-      const u = document.getElementById("logUser").value;
-      const p = document.getElementById("logPass").value;
-      let form = new FormData();
-      form.append("username", u);
-      form.append("password", p);
+// Messages
+async function loadMessages(){
+  if(!currentUser) return;
+  const r=await fetch(SERVER+"/inbox");
+  const msgs=await r.json();
+  const box=document.getElementById("messages");
+  box.innerHTML="";
+  msgs.forEach(m=>{
+    const div=document.createElement("div");
+    div.textContent=(m.sender===currentUser.user_id?"Me":"Other")+": "+m.text;
+    box.appendChild(div);
+  });
+  box.scrollTop=box.scrollHeight;
+}
+setInterval(loadMessages,2000);
 
-      const res = await fetch("/login", { method:"POST", body: form });
-      const data = await res.json();
-      document.getElementById("logMsg").innerText = JSON.stringify(data);
-    }
+document.getElementById("inputForm").onsubmit=async e=>{
+  e.preventDefault();
+  const msg=document.getElementById("messageInput").value;
+  if(!msg.trim()) return;
+  await fetch(SERVER+"/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({recipient:"all",text:msg})});
+  document.getElementById("messageInput").value="";
+  loadMessages();
+};
 
-    async function adminLogin() {
-      const p = document.getElementById("admPass").value;
-      let form = new FormData();
-      form.append("password", p);
+// Admin
+async function adminLogin(){
+  const pwd=document.getElementById("adminPwd").value;
+  const r=await fetch(SERVER+"/admin_login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
+  const d=await r.json();
+  if(d.error){alert(d.error);}else{ loadAdmin(); }
+}
 
-      const res = await fetch("/admin/login", { method:"POST", body: form });
-      const data = await res.json();
-      if (data.status === "ok") {
-        adminPassword = p;
-        show("adminPanel");
-        listUsers();
-      } else {
-        document.getElementById("admMsg").innerText = JSON.stringify(data);
-      }
-    }
+async function loadAdmin(){
+  const r=await fetch(SERVER+"/admin_panel");
+  const d=await r.json();
+  if(d.error){alert(d.error);return;}
+  let html="<h3>Admin Panel</h3><button onclick='resetDB()'>Reset DB</button><ul>";
+  for(const u in d.users){ html+=`<li>${u} / ${d.users[u].password}</li>`; }
+  html+="</ul>";
+  document.getElementById("adminForm").innerHTML=html;
+}
+async function resetDB(){
+  const r=await fetch(SERVER+"/admin_reset",{method:"POST"});
+  const d=await r.json();
+  alert(JSON.stringify(d));
+  loadAdmin();
+}
 
-    async function listUsers() {
-      if (!adminPassword) return;
-      const res = await fetch(`/admin/users?password=${adminPassword}`);
-      const data = await res.json();
-      document.getElementById("usersList").innerText = JSON.stringify(data, null, 2);
-    }
+// Buttons
+document.getElementById("loginBtn").onclick=showLogin;
+document.getElementById("adminBtn").onclick=showAdmin;
+document.getElementById("logoutBtn").onclick=doLogout;
 
-    async function resetDB() {
-      if (!adminPassword) return;
-      let form = new FormData();
-      form.append("password", adminPassword);
-      const res = await fetch("/admin/reset", { method:"POST", body: form });
-      const data = await res.json();
-      listUsers();
-      alert("Database reset!");
-    }
-  </script>
+showLogin();
+</script>
 </body>
 </html>
