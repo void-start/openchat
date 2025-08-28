@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Form
 import sqlite3
 import uuid
 import os
@@ -53,12 +54,10 @@ def hash_password(password: str) -> str:
 async def root():
     return FileResponse(INDEX_FILE)
 
-# --- Регистрация ---
+
+
 @app.post("/register")
-async def register(req: Request):
-    data = await req.json()
-    username = data.get("username")
-    password = data.get("password")
+async def register(username: str = Form(...), password: str = Form(...)):
     if not username or not password:
         return JSONResponse({"error": "Missing username/password"}, status_code=400)
     conn = sqlite3.connect(DB_FILE)
@@ -73,6 +72,7 @@ async def register(req: Request):
         return JSONResponse({"error": "User already exists"}, status_code=400)
     conn.close()
     return {"status": "ok", "user_id": user_id, "username": username}
+
 
 # --- Логин ---
 @app.post("/login")
