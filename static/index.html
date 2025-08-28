@@ -77,17 +77,24 @@ function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminFo
 async function doLogin(){
   const login=document.getElementById("loginName").value;
   const pass=document.getElementById("loginPass").value;
-  const r=await fetch(SERVER+"/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login,password:pass})});
+  const r=await fetch(SERVER+"/login",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({login,password:pass})
+  });
   const d=await r.json();
-  if(d.error){alert(d.error);}else{
+  if(d.error){
+    alert(d.error);
+  } else {
     currentUser=d;
-    document.getElementById("userInfo").textContent="Logged as "+d.login;
+    document.getElementById("userInfo").textContent="Logged as "+d.username;
     document.getElementById("inputForm").classList.remove("hidden");
     document.getElementById("logoutBtn").classList.remove("hidden");
     hideAll();
     loadMessages();
   }
 }
+
 
 async function doRegister(){
   const login=document.getElementById("regName").value;
