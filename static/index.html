@@ -18,21 +18,24 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 .user-item:hover { background:#020; }
 .user-item.active { background:#050; }
 #addContactBtn { margin:5px; padding:5px; background:#0f0; color:black; cursor:pointer; text-align:center;}
-#resetBtn, #loginBtn { background:#000; border:1px solid #0f0; color:#0f0; padding:5px 10px; cursor:pointer; transition:0.2s; margin-left:5px;}
-#resetBtn:hover, #loginBtn:hover { background:#0f0; color:black; }
+#loginForm { padding:20px; background:#010; border:1px solid #0f0; width:300px; margin:100px auto; }
+#loginForm input { width:100%; padding:5px; margin:5px 0; background:black; color:#0f0; border:1px solid #0f0;}
+#loginForm button { width:100%; padding:5px; margin-top:10px; background:#0f0; color:black; cursor:pointer; border:none;}
+#adminPanel { display:none; background:#111; color:#0f0; padding:10px; border-top:1px solid #0f0;}
+#adminPanel h3, #adminPanel h4 { margin:5px 0; }
+#resetDbBtn { background:#0f0; color:black; border:none; padding:5px 10px; cursor:pointer; }
 </style>
 </head>
 <body>
 
-<div id="header">
+<div id="header" style="display:none;">
     <span>Your ID: <span id="myId">loading...</span></span>
     <div>
-        <button id="loginBtn">[ Login/Register ]</button>
-        <button id="resetBtn">[ RESET DB ]</button>
+        <button id="adminBtn">[ Admin Panel ]</button>
     </div>
 </div>
 
-<div id="container">
+<div id="container" style="display:none;">
     <div id="users">
         <div id="addContactBtn">+ Add Contact</div>
     </div>
@@ -46,27 +49,72 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
     </div>
 </div>
 
+<div id="loginForm">
+    <h3>Login / Register</h3>
+    <input id="username" placeholder="Username"/>
+    <input id="password" type="password" placeholder="Password"/>
+    <button id="loginBtn">Login</button>
+    <button id="registerBtn">Register</button>
+</div>
+
+<div id="adminPanel">
+    <h3>Admin Panel</h3>
+    <button id="resetDbBtn">Reset DB</button>
+    <h4>Registered Users:</h4>
+    <div id="usersList"></div>
+</div>
+
 <script>
 const SERVER = window.location.origin;
 let userId = localStorage.getItem("userId");
-let displayName = localStorage.getItem("displayName");
+let username = localStorage.getItem("username");
 let contacts = JSON.parse(localStorage.getItem("contacts")||"[]");
 let selectedUser = null;
 
 // --- Login/Register ---
-async function loginOrRegister() {
-    let nickname = prompt("Enter your nickname:") || "Anon";
+async function loginUser() {
+    const uname = document.getElementById("username").value.trim();
+    const pwd = document.getElementById("password").value.trim();
+    if(!uname || !pwd){ alert("Enter username & password"); return; }
     const resp = await fetch(SERVER+"/login", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({display_name: nickname})
+        body: JSON.stringify({username:uname, password:pwd})
     });
     const data = await resp.json();
+    if(data.error){ alert(data.error); return; }
     userId = data.user_id;
-    displayName = data.display_name;
+    username = data.username;
     localStorage.setItem("userId", userId);
-    localStorage.setItem("displayName", displayName);
+    localStorage.setItem("username", username);
+    afterLogin();
+}
+
+async function registerUser() {
+    const uname = document.getElementById("username").value.trim();
+    const pwd = document.getElementById("password").value.trim();
+    if(!uname || !pwd){ alert("Enter username & password"); return; }
+    const resp = await fetch(SERVER+"/register", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({username:uname, password:pwd})
+    });
+    const data = await resp.json();
+    if(data.error){ alert(data.error); return; }
+    userId = data.user_id;
+    username = data.username;
+    localStorage.setItem("userId", userId);
+    localStorage.setItem("username", username);
+    afterLogin();
+}
+
+function afterLogin(){
+    document.getElementById("loginForm").style.display="none";
+    document.getElementById("header").style.display="flex";
+    document.getElementById("container").style.display="flex";
     document.getElementById("myId").textContent = userId;
+    renderContacts();
+    setInterval(loadMessages, 2000);
 }
 
 // --- Contacts ---
@@ -74,7 +122,7 @@ async function addContact() {
     const newId = prompt("Enter user ID:");
     if(!newId) return;
     if(!contacts.find(c => c.id===newId)){
-        contacts.push({id:newId, display_name:newId.substring(0,6)});
+        contacts.push({id:newId, username:newId.substring(0,6)});
         localStorage.setItem("contacts", JSON.stringify(contacts));
     }
     renderContacts();
@@ -86,7 +134,7 @@ function renderContacts(){
     document.getElementById("addContactBtn").onclick = addContact;
     contacts.forEach(u=>{
         const div = document.createElement("div");
-        div.textContent = u.display_name;
+        div.textContent = u.username;
         div.className = "user-item" + (selectedUser && selectedUser.id===u.id ? " active" : "");
         div.onclick = ()=>{
             selectedUser = u;
@@ -107,6 +155,8 @@ async function loadMessages(){
     msgs.forEach(m=>{
         if((m.sender===selectedUser.id && m.recipient===userId) || 
            (m.sender===userId && m.recipient===selectedUser.id)){
+            const wrapper = document.createElement("div");
+            wrapper.style.margin = "5px 0";
             if(m.text.startsWith("[file]")){
                 const filename = m.text.replace("[file]","");
                 const ext = filename.split('.').pop().toLowerCase();
@@ -114,19 +164,18 @@ async function loadMessages(){
                     const img = document.createElement("img");
                     img.src = SERVER+"/media/"+filename;
                     img.style.maxWidth="200px";
-                    chatDiv.appendChild(img);
+                    wrapper.appendChild(img);
                 } else {
                     const a = document.createElement("a");
                     a.href = SERVER+"/media/"+filename;
-                    a.textContent = "📎 File";
+                    a.textContent = "📎 "+filename;
                     a.target="_blank";
-                    chatDiv.appendChild(a);
+                    wrapper.appendChild(a);
                 }
             } else {
-                const div = document.createElement("div");
-                div.textContent = (m.sender===userId?"Me":selectedUser.display_name)+": "+m.text;
-                chatDiv.appendChild(div);
+                wrapper.textContent = (m.sender===userId?"Me":selectedUser.username)+": "+m.text;
             }
+            chatDiv.appendChild(wrapper);
         }
     });
     chatDiv.scrollTop = chatDiv.scrollHeight;
@@ -159,27 +208,50 @@ document.getElementById("inputForm").onsubmit = async function(e){
     loadMessages();
 }
 
-// --- Reset DB ---
-document.getElementById("resetBtn").onclick = async function(){
-    const pwd = prompt("Enter reset password:");
+// --- Admin Panel ---
+document.getElementById("adminBtn").onclick = async function(){
+    const pwd = prompt("Enter admin password:");
     if(!pwd) return;
-    const resp = await fetch(`${SERVER}/reset?password=${pwd}`, {method:"POST"});
+
+    const resp = await fetch(`${SERVER}/admin/login`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ password: pwd })
+    });
     const data = await resp.json();
-    alert(JSON.stringify(data));
-}
+    if(data.error){ alert(data.error); return; }
 
-// --- Login/Register Button ---
-document.getElementById("loginBtn").onclick = loginOrRegister;
+    document.getElementById("adminPanel").style.display="block";
 
-// --- Auto-update ---
-setInterval(loadMessages, 2000);
+    document.getElementById("resetDbBtn").onclick = async ()=>{
+        if(!confirm("Really reset DB?")) return;
+        const r = await fetch(`${SERVER}/admin/reset`, {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ password: pwd })
+        });
+        alert(await r.text());
+    };
+
+    const resp2 = await fetch(`${SERVER}/admin/users?password=${pwd}`);
+    const users = await resp2.json();
+    const listDiv = document.getElementById("usersList");
+    listDiv.innerHTML = "";
+    users.forEach(u=>{
+        const div = document.createElement("div");
+        div.textContent = u.username + " | " + u.password_hash;
+        listDiv.appendChild(div);
+    });
+};
+
+// --- Bind buttons ---
+document.getElementById("loginBtn").onclick = loginUser;
+document.getElementById("registerBtn").onclick = registerUser;
 
 // --- Init ---
-(async function(){
-    if(!userId) await loginOrRegister();
-    document.getElementById("myId").textContent = userId;
-    renderContacts();
-})();
+if(userId && username){
+    afterLogin();
+}
 </script>
 </body>
 </html>
