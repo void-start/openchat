@@ -56,7 +56,10 @@ async def root():
 
 
 @app.post("/register")
-async def register(username: str = Form(...), password: str = Form(...)):
+async def register(req: Request):
+    data = await req.json()
+    username = data.get("login")
+    password = data.get("password")
     if not username or not password:
         return JSONResponse({"error":"Missing fields"}, status_code=400)
 
@@ -75,8 +78,13 @@ async def register(username: str = Form(...), password: str = Form(...)):
 
 
 
+
 @app.post("/login")
-async def login(username: str = Form(...), password: str = Form(...)):
+async def login(req: Request):
+    data = await req.json()
+    username = data.get("login")
+    password = data.get("password")
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT id, password_hash FROM users WHERE username=?", (username,))
@@ -85,11 +93,11 @@ async def login(username: str = Form(...), password: str = Form(...)):
 
     if not row:
         return JSONResponse({"error":"No such user"}, status_code=404)
-
     if row[1] != hash_password(password):
         return JSONResponse({"error":"Wrong password"}, status_code=403)
 
     return {"status":"ok","user_id":row[0],"username":username}
+
 
 
 # --- Админ вход ---
