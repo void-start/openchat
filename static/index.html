@@ -10,6 +10,7 @@
   * { box-sizing:border-box; }
   body { margin:0; font-family:monospace; background:var(--bg); color:var(--ink);}
 
+  /* --- Хедер и лейаут --- */
   #header { padding:10px; border-bottom:1px solid var(--line); background:var(--panel); display:flex; justify-content:space-between; align-items:center;}
   #container { display:flex; height:calc(100vh - 40px);}
   #users { width:240px; background:var(--panel); border-right:1px solid var(--line); overflow-y:auto;}
@@ -27,17 +28,21 @@
     font-family:monospace;
   }
 
-  button { cursor:pointer; transition: all .2s; }
+  /* --- Кнопки --- */
+  button { cursor:pointer; background:#000; border:1px solid var(--line); transition: all .2s; }
   button:hover { background:#020; box-shadow:0 0 6px #0f0; }
   button:active { background:#040; }
+  button[disabled] { opacity:.5; cursor:not-allowed; box-shadow:none; }
 
+  /* --- Сообщения и пользователи --- */
   #messages .line { margin-bottom:6px; }
   #messages .me { color:#9f9; }
   #users .item { padding:8px 10px; border-bottom:1px solid #060; cursor:pointer; }
   #users .item.active { background:#020; font-weight:bold; }
   #users .item .tag { opacity:.8; font-size:12px; }
-  .toolbar { display:flex; gap:8px; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; }
 
+  /* --- Модалки (логин/регистрация/админ) --- */
   #loginForm, #registerForm, #adminForm {
     position:fixed;
     top:50%; left:50%;
@@ -66,7 +71,7 @@
     z-index:50;
   }
   #videoPanel video {
-    width:200px; height:150px;
+    width:220px; height:160px;
     background:#111;
     border:1px solid var(--line);
     object-fit:cover;
@@ -81,7 +86,7 @@
     <button id="loginBtn">Login</button>
     <button id="adminBtn">Admin</button>
     <button id="logoutBtn" class="hidden">Logout</button>
-    <button id="callBtn" class="hidden">Call</button>
+    <button id="callBtn" class="hidden" title="Select a user to call" disabled>Call</button>
     <button id="hangupBtn" class="hidden">Hangup</button>
   </div>
 </div>
@@ -98,6 +103,7 @@
   </div>
 </div>
 
+<!-- Панель видеозвонка -->
 <div id="videoPanel" class="hidden">
   <video id="localVideo" autoplay muted playsinline></video>
   <video id="remoteVideo" autoplay playsinline></video>
@@ -128,89 +134,49 @@
 
 <script>
 const SERVER = window.location.origin;
-let currentUser = null;
+
+let currentUser = null;     // { user_id, username }
 let adminPwd = null;
-let selectedScope = "global";
-let selectedPeer = "all";
+let selectedScope = "global";  // "global" | "dialog"
+let selectedPeer = "all";      // "all" | user_id
 let pollTimer = null;
 
-// --- Video call ---
-let ws, pc, localStream, remoteStream, peerId;
-
-function connectWS(){
-  if(!currentUser) return;
-  ws = new WebSocket(`ws://${location.host}/ws/${currentUser.user_id}`);
-  ws.onmessage = async (event)=>{
-    const msg = JSON.parse(event.data);
-    if(msg.type==="offer"){ await handleOffer(msg); }
-    else if(msg.type==="answer"){ await pc.setRemoteDescription(new RTCSessionDescription(msg.data)); }
-    else if(msg.type==="candidate"){ await pc.addIceCandidate(new RTCIceCandidate(msg.data)); }
-  };
+/* ===================== UI helpers ===================== */
+function showLogin(){ hideAll(); document.getElementById("loginForm").classList.remove("hidden"); }
+function showRegister(){ hideAll(); document.getElementById("registerForm").classList.remove("hidden"); }
+function showAdmin(){ hideAll(); document.getElementById("adminForm").classList.remove("hidden"); }
+function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>e.classList.add("hidden")); }
+function setTopic(text){ document.getElementById("topicBar").textContent = text; }
+function setAuthUI(logged){
+  document.getElementById("inputForm").classList.toggle("hidden", !logged);
+  document.getElementById("logoutBtn").classList.toggle("hidden", !logged);
+  document.getElementById("callBtn").classList.toggle("hidden", !logged);
+  document.getElementById("hangupBtn").classList.toggle("hidden", !logged);
+  updateCallButtons();
+}
+function updateCallButtons(){
+  const callBtn = document.getElementById("callBtn");
+  const canCall = !!currentUser && selectedScope==="dialog" && selectedPeer!=="all";
+  callBtn.disabled = !canCall;
+  callBtn.title = canCall ? "Start call" : "Select a user to call";
+}
+function el(tag, cls, text){
+  const n = document.createElement(tag);
+  if(cls) n.className = cls;
+  if(text!=null) n.textContent = text;
+  return n;
 }
 
-async function startCall(){
-  if(selectedPeer==="all"){ alert("Select user for call"); return; }
-  peerId = selectedPeer;
-  pc = new RTCPeerConnection();
-
-  localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
-  localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
-  document.getElementById("localVideo").srcObject = localStream;
-
-  remoteStream = new MediaStream();
-  pc.ontrack = e=>e.streams[0].getTracks().forEach(t=>remoteStream.addTrack(t));
-  document.getElementById("remoteVideo").srcObject = remoteStream;
-
-  pc.onicecandidate = e=>{
-    if(e.candidate) ws.send(JSON.stringify({to:peerId,type:"candidate",data:e.candidate}));
-  };
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({to:peerId,type:"offer",data:offer}));
-
-  document.getElementById("videoPanel").classList.remove("hidden");
-  document.getElementById("hangupBtn").classList.remove("hidden");
-}
-
-async function handleOffer(msg){
-  peerId = msg.from;
-  pc = new RTCPeerConnection();
-
-  localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
-  localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
-  document.getElementById("localVideo").srcObject = localStream;
-
-  remoteStream = new MediaStream();
-  pc.ontrack = e=>e.streams[0].getTracks().forEach(t=>remoteStream.addTrack(t));
-  document.getElementById("remoteVideo").srcObject = remoteStream;
-
-  pc.onicecandidate = e=>{
-    if(e.candidate) ws.send(JSON.stringify({to:peerId,type:"candidate",data:e.candidate}));
-  };
-
-  await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  ws.send(JSON.stringify({to:peerId,type:"answer",data:answer}));
-
-  document.getElementById("videoPanel").classList.remove("hidden");
-  document.getElementById("hangupBtn").classList.remove("hidden");
-}
-
-function hangup(){
-  if(pc){ pc.close(); pc=null; }
-  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); }
-  document.getElementById("videoPanel").classList.add("hidden");
-  document.getElementById("hangupBtn").classList.add("hidden");
-}
-
-// --- (остальной твой код чата без изменений) ---
-// ... (авторизация, сообщения, polling, admin и т.д.) ...
-
-// после doLogin:
+/* ===================== Auth ===================== */
 async function doLogin(){
-  // твой старый код...
+  const login = document.getElementById("loginName").value.trim();
+  const pass  = document.getElementById("loginPass").value;
+  const r = await fetch(SERVER+"/login", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({login, password: pass})
+  });
+  const d = await r.json();
+  if(d.error){ alert(d.error); return; }
   currentUser = d;
   document.getElementById("userInfo").textContent = "Logged as " + d.username;
   setAuthUI(true);
@@ -218,12 +184,276 @@ async function doLogin(){
   await refreshUsers();
   selectGlobal();
   startPolling();
-  connectWS(); // <--- подключаем WS для звонков
+  connectWS(); // подключаем WS для сигналинга звонков
 }
 
-// кнопки
+async function doRegister(){
+  const login = document.getElementById("regName").value.trim();
+  const pass  = document.getElementById("regPass").value;
+  const r = await fetch(SERVER+"/register", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({login, password: pass})
+  });
+  const d = await r.json();
+  if(d.error){ alert(d.error); return; }
+  alert("Registered. Now login.");
+  showLogin();
+}
+
+async function doLogout(){
+  stopPolling();
+  disconnectWS();
+  hangup(); // на всякий случай закрыть стримы
+  currentUser = null;
+  selectedScope = "global";
+  selectedPeer = "all";
+  document.getElementById("userInfo").textContent = "Not logged in";
+  document.getElementById("messages").innerHTML = "";
+  document.getElementById("users").innerHTML = "";
+  setTopic("🌐 Global chat");
+  setAuthUI(false);
+  showLogin();
+}
+
+/* ===================== Users ===================== */
+async function refreshUsers(){
+  if(!currentUser) return;
+  const r = await fetch(SERVER + "/users?exclude_id=" + encodeURIComponent(currentUser.user_id));
+  const d = await r.json();
+  const box = document.getElementById("users");
+  box.innerHTML = "";
+
+  // Global chat item
+  const globalItem = el("div", "item" + (selectedPeer==="all" ? " active" : ""), "🌐 Global chat");
+  globalItem.onclick = selectGlobal;
+  box.appendChild(globalItem);
+
+  // Users
+  d.users.forEach(u=>{
+    const item = el("div", "item" + (selectedPeer===u.id ? " active" : ""), u.username);
+    const tag = el("div", "tag", u.id);
+    item.appendChild(tag);
+    item.onclick = ()=> selectPeer(u.id, u.username);
+    box.appendChild(item);
+  });
+  updateCallButtons();
+}
+
+function markActivePeer(){
+  const items = document.querySelectorAll("#users .item");
+  items.forEach(i => i.classList.remove("active"));
+  if(selectedPeer==="all"){
+    items[0]?.classList.add("active");
+  } else {
+    items.forEach(i=>{
+      const idDiv = i.querySelector(".tag");
+      if(idDiv && idDiv.textContent === selectedPeer) i.classList.add("active");
+    });
+  }
+}
+
+function selectGlobal(){
+  selectedScope = "global";
+  selectedPeer  = "all";
+  setTopic("🌐 Global chat");
+  markActivePeer();
+  loadMessages(true);
+  updateCallButtons();
+}
+
+function selectPeer(userId, username){
+  selectedScope = "dialog";
+  selectedPeer  = userId;
+  setTopic("💬 Chat with: " + username);
+  markActivePeer();
+  loadMessages(true);
+  updateCallButtons();
+}
+
+/* ===================== Messages ===================== */
+async function loadMessages(forceScroll=false){
+  if(!currentUser) return;
+  let url = SERVER + "/messages?limit=200";
+  if(selectedScope === "global"){
+    url += "&scope=global";
+  } else {
+    url += "&scope=dialog&user_id=" + encodeURIComponent(currentUser.user_id) +
+           "&peer_id=" + encodeURIComponent(selectedPeer);
+  }
+
+  const r = await fetch(url);
+  if(!r.ok) return;
+  const list = await r.json();
+  const box = document.getElementById("messages");
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+
+  box.innerHTML = "";
+  list.forEach(m=>{
+    const who = (m.sender_id === currentUser.user_id) ? "You" : (m.sender_name || m.sender_id);
+    const line = el("div", "line" + (who==="You" ? " me" : ""), `${who}: ${m.text}`);
+    box.appendChild(line);
+  });
+
+  if(forceScroll || atBottom){
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+document.getElementById("inputForm").onsubmit = async (e)=>{
+  e.preventDefault();
+  if(!currentUser) return;
+  const inp = document.getElementById("messageInput");
+  const text = inp.value.trim();
+  if(!text) return;
+  const payload = {
+    sender_id: currentUser.user_id,
+    recipient: (selectedScope==="global" ? "all" : selectedPeer),
+    text
+  };
+  await fetch(SERVER+"/send", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+  inp.value = "";
+  loadMessages(true);
+};
+
+/* ===================== Polling ===================== */
+function startPolling(){
+  stopPolling();
+  pollTimer = setInterval(()=>{
+    loadMessages(false);
+    refreshUsers();
+  }, 1500);
+}
+function stopPolling(){
+  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+}
+
+/* ===================== Admin ===================== */
+async function adminLogin(){
+  const pwd = document.getElementById("adminPwd").value;
+  const r = await fetch(SERVER+"/admin/login",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({password: pwd})
+  });
+  const d = await r.json();
+  if(d.error){ alert(d.error); return; }
+  adminPwd = pwd;
+  loadAdmin();
+}
+
+async function loadAdmin(){
+  const r = await fetch(SERVER+"/admin/users?password="+encodeURIComponent(adminPwd));
+  const d = await r.json();
+  if(d.error){ alert(d.error); return; }
+  let html = "<h3>Admin Panel</h3><div class='toolbar'>"+
+             "<button onclick='resetDB()'>Reset DB</button></div><ul>";
+  d.users.forEach(u=>{
+    html += `<li>${u.username} — messages: ${u.messages}</li>`;
+  });
+  html += "</ul>";
+  document.getElementById("adminForm").innerHTML = html;
+}
+
+async function resetDB(){
+  const r = await fetch(SERVER+"/admin/reset",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({password: adminPwd})
+  });
+  const d = await r.json();
+  alert(JSON.stringify(d));
+  loadAdmin();
+}
+
+/* ===================== WebRTC / Calls ===================== */
+let ws = null, pc = null, localStream = null, remoteStream = null, peerId = null;
+
+function wsURL(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${location.host}/ws/${currentUser.user_id}`;
+}
+
+function connectWS(){
+  if(!currentUser || ws) return;
+  ws = new WebSocket(wsURL());
+  ws.onmessage = async (event)=>{
+    const msg = JSON.parse(event.data);
+    if(msg.type==="offer"){ await handleOffer(msg); }
+    else if(msg.type==="answer"){ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.data)); }
+    else if(msg.type==="candidate"){ if(pc) await pc.addIceCandidate(new RTCIceCandidate(msg.data)); }
+  };
+  ws.onclose = ()=>{ ws = null; };
+}
+function disconnectWS(){
+  if(ws){ try{ ws.close(); }catch(e){} ws=null; }
+}
+
+async function startCall(){
+  if(selectedPeer==="all"){ alert("Select user for call"); return; }
+  peerId = selectedPeer;
+  await ensurePeerConnection();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ws?.send(JSON.stringify({to:peerId,type:"offer",data:offer}));
+  showVideoUI(true);
+}
+async function handleOffer(msg){
+  peerId = msg.from;
+  await ensurePeerConnection();
+  await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  ws?.send(JSON.stringify({to:peerId,type:"answer",data:answer}));
+  showVideoUI(true);
+}
+
+async function ensurePeerConnection(){
+  if(pc) return;
+  pc = new RTCPeerConnection();
+  pc.onicecandidate = e=>{
+    if(e.candidate) ws?.send(JSON.stringify({to:peerId,type:"candidate",data:e.candidate}));
+  };
+  // медиа
+  if(!localStream){
+    try{
+      localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+    }catch(err){
+      alert("Camera/mic error: " + err);
+      return;
+    }
+  }
+  localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
+  document.getElementById("localVideo").srcObject = localStream;
+
+  remoteStream = new MediaStream();
+  pc.ontrack = e=>e.streams[0].getTracks().forEach(t=>remoteStream.addTrack(t));
+  document.getElementById("remoteVideo").srcObject = remoteStream;
+}
+
+function showVideoUI(visible){
+  document.getElementById("videoPanel").classList.toggle("hidden", !visible);
+  document.getElementById("hangupBtn").classList.toggle("hidden", !visible);
+}
+
+function hangup(){
+  if(pc){ try{ pc.ontrack=null; pc.onicecandidate=null; pc.close(); }catch(e){} pc=null; }
+  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+  if(remoteStream){ remoteStream.getTracks().forEach(t=>t.stop()); remoteStream=null; }
+  peerId=null;
+  showVideoUI(false);
+}
+
+/* ===================== Header buttons ===================== */
+document.getElementById("loginBtn").onclick = showLogin;
+document.getElementById("adminBtn").onclick = showAdmin;
+document.getElementById("logoutBtn").onclick = doLogout;
 document.getElementById("callBtn").onclick = startCall;
 document.getElementById("hangupBtn").onclick = hangup;
+
+/* ===================== старт ===================== */
+showLogin();
 </script>
+
 </body>
 </html>
