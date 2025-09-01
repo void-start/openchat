@@ -17,7 +17,7 @@
   #messages { flex:1; padding:10px; overflow-y:auto; }
   #inputForm { display:flex; gap:6px; border-top:1px solid var(--line); padding:8px; }
   #inputForm input, #inputForm button { background:#000; color:var(--ink); border:1px solid var(--line); padding:6px 8px; }
-  .hidden { display:none; }
+  .hidden { display:none !important; }
   #messages .line { margin-bottom:6px; }
   #messages .me { color:#9f9; }
   #users .item { padding:8px 10px; border-bottom:1px solid #060; cursor:pointer; }
@@ -25,20 +25,25 @@
   #users .item .tag { opacity:.8; font-size:12px; }
   .toolbar { display:flex; gap:8px; }
 
-  /* --- Модальные окна --- */
-  .modal {
+  /* --- Overlay + модальные окна --- */
+  .overlay {
     position:fixed;
-    top:50%;
-    left:50%;
-    transform:translate(-50%, -50%);
+    top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.8);
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    z-index:99;
+  }
+  .modal {
     background:var(--panel);
     border:1px solid var(--line);
     padding:20px;
-    z-index:100;
     min-width:260px;
     box-shadow:0 0 12px #0f0;
+    z-index:100;
   }
-  .modal h3 { margin-top:0; }
+  .modal h3 { margin-top:0; text-align:center; }
   .modal input {
     width:100%;
     margin-bottom:12px;
@@ -86,37 +91,58 @@
   </div>
 </div>
 
-<!-- Auth Forms -->
-<div id="loginForm" class="modal hidden">
-  <h3>Login</h3>
-  <input id="loginName" placeholder="Login">
-  <input id="loginPass" type="password" placeholder="Password">
-  <div class="toolbar">
-    <button type="button" onclick="doLogin()">Login</button>
-    <button type="button" onclick="showRegister()">Register</button>
+<!-- Overlay + Auth Forms -->
+<div id="overlay" class="overlay">
+  <div id="loginForm" class="modal">
+    <h3>Login</h3>
+    <input id="loginName" placeholder="Login">
+    <input id="loginPass" type="password" placeholder="Password">
+    <div class="toolbar">
+      <button type="button" onclick="doLogin()">Login</button>
+      <button type="button" onclick="showRegister()">Register</button>
+    </div>
   </div>
-</div>
 
-<div id="registerForm" class="modal hidden">
-  <h3>Register</h3>
-  <input id="regName" placeholder="Login">
-  <input id="regPass" type="password" placeholder="Password">
-  <div class="toolbar">
-    <button type="button" onclick="doRegister()">Register</button>
-    <button type="button" onclick="showLogin()">Back</button>
+  <div id="registerForm" class="modal hidden">
+    <h3>Register</h3>
+    <input id="regName" placeholder="Login">
+    <input id="regPass" type="password" placeholder="Password">
+    <div class="toolbar">
+      <button type="button" onclick="doRegister()">Register</button>
+      <button type="button" onclick="showLogin()">Back</button>
+    </div>
   </div>
-</div>
 
-<div id="adminForm" class="modal hidden">
-  <h3>Admin</h3>
-  <input id="adminPwd" type="password" placeholder="Password">
-  <div class="toolbar">
-    <button type="button" onclick="adminLogin()">Enter</button>
+  <div id="adminForm" class="modal hidden">
+    <h3>Admin</h3>
+    <input id="adminPwd" type="password" placeholder="Password">
+    <div class="toolbar">
+      <button type="button" onclick="adminLogin()">Enter</button>
+    </div>
   </div>
 </div>
 
 <script>
-/* твой JS без изменений */
+/* твой JS, но обнови функции показа: */
+function showLogin(){
+  document.getElementById("overlay").classList.remove("hidden");
+  document.getElementById("loginForm").classList.remove("hidden");
+  document.getElementById("registerForm").classList.add("hidden");
+  document.getElementById("adminForm").classList.add("hidden");
+}
+function showRegister(){
+  document.getElementById("loginForm").classList.add("hidden");
+  document.getElementById("registerForm").classList.remove("hidden");
+}
+function showAdmin(){
+  document.getElementById("loginForm").classList.add("hidden");
+  document.getElementById("registerForm").classList.add("hidden");
+  document.getElementById("adminForm").classList.remove("hidden");
+}
+function hideAll(){
+  document.getElementById("overlay").classList.add("hidden");
+  document.querySelectorAll(".modal").forEach(e=>e.classList.add("hidden"));
+}
 </script>
 </body>
 </html>
