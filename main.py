@@ -1,307 +1,249 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>HackerChat</title>
-<style>
-  :root {
-    --bg:#000; --ink:#0f0; --panel:#010; --line:#0f0;
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:monospace; background:var(--bg); color:var(--ink);}
-  #header { padding:10px; border-bottom:1px solid var(--line); background:var(--panel); display:flex; justify-content:space-between; align-items:center;}
-  #container { display:flex; height:calc(100vh - 40px);}
-  #users { width:240px; background:var(--panel); border-right:1px solid var(--line); overflow-y:auto;}
-  #chat { flex:1; display:flex; flex-direction:column; }
-  #topicBar { padding:8px 10px; border-bottom:1px solid var(--line); background:#000; font-weight:bold; }
-  #messages { flex:1; padding:10px; overflow-y:auto; }
-  #inputForm { display:flex; gap:6px; border-top:1px solid var(--line); padding:8px; }
-  #inputForm input, #inputForm button { background:#000; color:var(--ink); border:1px solid var(--line); padding:6px 8px; }
-  #loginForm, #registerForm, #adminForm { padding:20px; }
-  .hidden { display:none; }
-  button { cursor:pointer; }
-  #messages .line { margin-bottom:6px; }
-  #messages .me { color:#9f9; }
-  #users .item { padding:8px 10px; border-bottom:1px solid #060; cursor:pointer; }
-  #users .item.active { background:#020; font-weight:bold; }
-  #users .item .tag { opacity:.8; font-size:12px; }
-  .toolbar { display:flex; gap:8px; }
-</style>
-</head>
-<body>
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+import sqlite3
+import uuid
+import os
+import hashlib
+from datetime import datetime
 
-<div id="header">
-  <span id="userInfo">Not logged in</span>
-  <div class="toolbar">
-    <button id="loginBtn">Login</button>
-    <button id="adminBtn">Admin</button>
-    <button id="logoutBtn" class="hidden">Logout</button>
-  </div>
-</div>
+app = FastAPI()
 
-<div id="container">
-  <div id="users"></div>
-  <div id="chat">
-    <div id="topicBar">🌐 Global chat</div>
-    <div id="messages"></div>
-    <form id="inputForm" class="hidden">
-      <input id="messageInput" type="text" placeholder="Type a message and press Enter…" autocomplete="off" />
-      <button type="submit">Send</button>
-    </form>
-  </div>
-</div>
+# --- Конфиг ---
+DB_FILE = "db.sqlite"
+STATIC_DIR = "static"
+INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
+os.makedirs(STATIC_DIR, exist_ok=True)
 
-<!-- Auth Forms -->
-<div id="loginForm" class="hidden">
-  <h3>Login</h3>
-  <input id="loginName" placeholder="Login"><br><br>
-  <input id="loginPass" type="password" placeholder="Password"><br><br>
-  <button type="button" onclick="doLogin()">Login</button>
-  <button type="button" onclick="showRegister()">Register</button>
-</div>
+# --- CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-<div id="registerForm" class="hidden">
-  <h3>Register</h3>
-  <input id="regName" placeholder="Login"><br><br>
-  <input id="regPass" type="password" placeholder="Password"><br><br>
-  <button type="button" onclick="doRegister()">Register</button>
-  <button type="button" onclick="showLogin()">Back</button>
-</div>
+# --- Статика ---
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-<div id="adminForm" class="hidden">
-  <h3>Admin</h3>
-  <input id="adminPwd" type="password" placeholder="Password"><br><br>
-  <button type="button" onclick="adminLogin()">Enter</button>
-</div>
+# --- Утилиты ---
+def db():
+    return sqlite3.connect(DB_FILE)
 
-<script>
-const SERVER = window.location.origin;
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
-let currentUser = null;     // { user_id, username }
-let adminPwd = null;
-let selectedScope = "global";  // "global" | "dialog"
-let selectedPeer = "all";      // "all" | user_id
-let pollTimer = null;
+def utc_iso():
+    # ISO без микросекунд, чтобы сортировка как TEXT была корректной
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-// ---------- UI helpers ----------
-function showLogin(){ hideAll(); document.getElementById("loginForm").classList.remove("hidden"); }
-function showRegister(){ hideAll(); document.getElementById("registerForm").classList.remove("hidden"); }
-function showAdmin(){ hideAll(); document.getElementById("adminForm").classList.remove("hidden"); }
-function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>e.classList.add("hidden")); }
-function setTopic(text){ document.getElementById("topicBar").textContent = text; }
-function setAuthUI(logged){
-  document.getElementById("inputForm").classList.toggle("hidden", !logged);
-  document.getElementById("logoutBtn").classList.toggle("hidden", !logged);
-}
+# --- Инициализация БД ---
+def init_db():
+    conn = db()
+    c = conn.cursor()
+    # пользователи
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE,
+        password_hash TEXT
+    )
+    """)
+    # сообщения
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        sender_id TEXT NOT NULL,
+        recipient TEXT NOT NULL,      -- 'all' или user_id получателя
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """)
+    # индексы для ускорения диалогов/ленты
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, recipient)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)")
+    conn.commit()
+    conn.close()
 
-function el(tag, cls, text){
-  const n = document.createElement(tag);
-  if(cls) n.className = cls;
-  if(text!=null) n.textContent = text;
-  return n;
-}
+init_db()
 
-// ---------- Auth ----------
-async function doLogin(){
-  const login = document.getElementById("loginName").value.trim();
-  const pass  = document.getElementById("loginPass").value;
-  const r = await fetch(SERVER+"/login", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({login, password: pass})
-  });
-  const d = await r.json();
-  if(d.error){ alert(d.error); return; }
-  currentUser = d;
-  document.getElementById("userInfo").textContent = "Logged as " + d.username;
-  setAuthUI(true);
-  hideAll();
-  await refreshUsers();
-  selectGlobal();
-  startPolling();
-}
+# --- Главная ---
+@app.get("/")
+async def root():
+    return FileResponse(INDEX_FILE)
 
-async function doRegister(){
-  const login = document.getElementById("regName").value.trim();
-  const pass  = document.getElementById("regPass").value;
-  const r = await fetch(SERVER+"/register", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({login, password: pass})
-  });
-  const d = await r.json();
-  if(d.error){ alert(d.error); return; }
-  alert("Registered. Now login.");
-  showLogin();
-}
+# --- Регистрация / Логин ---
+@app.post("/register")
+async def register(req: Request):
+    data = await req.json()
+    username = data.get("login")
+    password = data.get("password")
+    if not username or not password:
+        return JSONResponse({"error":"Missing fields"}, status_code=400)
 
-async function doLogout(){
-  stopPolling();
-  currentUser = null;
-  selectedScope = "global";
-  selectedPeer = "all";
-  document.getElementById("userInfo").textContent = "Not logged in";
-  document.getElementById("messages").innerHTML = "";
-  document.getElementById("users").innerHTML = "";
-  setTopic("🌐 Global chat");
-  setAuthUI(false);
-  showLogin();
-}
+    conn = db()
+    c = conn.cursor()
+    try:
+        user_id = str(uuid.uuid4())
+        c.execute("INSERT INTO users (id, username, password_hash) VALUES (?,?,?)",
+                  (user_id, username, hash_password(password)))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return JSONResponse({"error":"Username already exists"}, status_code=400)
+    conn.close()
+    return {"status":"ok","user_id":user_id,"username":username}
 
-// ---------- Users ----------
-async function refreshUsers(){
-  if(!currentUser) return;
-  const r = await fetch(SERVER + "/users?exclude_id=" + encodeURIComponent(currentUser.user_id));
-  const d = await r.json();
-  const box = document.getElementById("users");
-  box.innerHTML = "";
+@app.post("/login")
+async def login(req: Request):
+    data = await req.json()
+    username = data.get("login")
+    password = data.get("password")
+    if not username or not password:
+        return JSONResponse({"error":"Missing fields"}, status_code=400)
 
-  // Global chat item
-  const globalItem = el("div", "item" + (selectedPeer==="all" ? " active" : ""), "🌐 Global chat");
-  globalItem.onclick = selectGlobal;
-  box.appendChild(globalItem);
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT id, password_hash FROM users WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
 
-  // Users
-  d.users.forEach(u=>{
-    const item = el("div", "item" + (selectedPeer===u.id ? " active" : ""), u.username);
-    const tag = el("div", "tag", u.id);
-    item.appendChild(tag);
-    item.onclick = ()=> selectPeer(u.id, u.username);
-    box.appendChild(item);
-  });
-}
+    if not row:
+        return JSONResponse({"error":"No such user"}, status_code=404)
+    if row[1] != hash_password(password):
+        return JSONResponse({"error":"Wrong password"}, status_code=403)
 
-function markActivePeer(){
-  const items = document.querySelectorAll("#users .item");
-  items.forEach(i => i.classList.remove("active"));
-  if(selectedPeer==="all"){
-    items[0]?.classList.add("active");
-  } else {
-    // match by tag text (id)
-    items.forEach(i=>{
-      const idDiv = i.querySelector(".tag");
-      if(idDiv && idDiv.textContent === selectedPeer) i.classList.add("active");
-    });
-  }
-}
+    return {"status":"ok","user_id":row[0],"username":username}
 
-function selectGlobal(){
-  selectedScope = "global";
-  selectedPeer  = "all";
-  setTopic("🌐 Global chat");
-  markActivePeer();
-  loadMessages(true);
-}
+# --- Пользователи ---
+@app.get("/users")
+async def list_users(exclude_id: str = ""):
+    conn = db()
+    c = conn.cursor()
+    if exclude_id:
+        c.execute("SELECT id, username FROM users WHERE id <> ? ORDER BY username ASC", (exclude_id,))
+    else:
+        c.execute("SELECT id, username FROM users ORDER BY username ASC")
+    rows = c.fetchall()
+    conn.close()
+    return {"users":[{"id":r[0], "username":r[1]} for r in rows]}
 
-function selectPeer(userId, username){
-  selectedScope = "dialog";
-  selectedPeer  = userId;
-  setTopic("💬 Chat with: " + username);
-  markActivePeer();
-  loadMessages(true);
-}
+# --- Отправка сообщения ---
+@app.post("/send")
+async def send(req: Request):
+    data = await req.json()
+    sender_id = data.get("sender_id")
+    recipient = data.get("recipient")   # 'all' или user_id
+    text = (data.get("text") or "").strip()
 
-// ---------- Messages ----------
-async function loadMessages(forceScroll=false){
-  if(!currentUser) return;
-  let url = SERVER + "/messages?limit=200";
-  if(selectedScope === "global"){
-    url += "&scope=global";
-  } else {
-    url += "&scope=dialog&user_id=" + encodeURIComponent(currentUser.user_id) +
-           "&peer_id=" + encodeURIComponent(selectedPeer);
-  }
+    if not sender_id or not recipient or not text:
+        return JSONResponse({"error":"Missing sender/recipient/text"}, status_code=400)
 
-  const r = await fetch(url);
-  if(!r.ok) return;
-  const list = await r.json();
-  const box = document.getElementById("messages");
-  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    msg_id = str(uuid.uuid4())
+    created_at = utc_iso()
 
-  box.innerHTML = "";
-  list.forEach(m=>{
-    const who = (m.sender_id === currentUser.user_id) ? "You" : (m.sender_name || m.sender_id);
-    const line = el("div", "line" + (who==="You" ? " me" : ""), `${who}: ${m.text}`);
-    box.appendChild(line);
-  });
+    conn = db()
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (id, sender_id, recipient, text, created_at) VALUES (?,?,?,?,?)",
+              (msg_id, sender_id, recipient, text, created_at))
+    conn.commit()
+    conn.close()
+    return {"status":"sent","id":msg_id,"created_at":created_at}
 
-  if(forceScroll || atBottom){
-    box.scrollTop = box.scrollHeight;
-  }
-}
+# --- Получение сообщений ---
+# scope=global -> общая лента
+# scope=dialog&user_id={me}&peer_id={other} -> личный диалог
+@app.get("/messages")
+async def get_messages(scope: str = "global", user_id: str = "", peer_id: str = "", limit: int = 200):
+    limit = max(1, min(limit, 500))
+    conn = db()
+    c = conn.cursor()
 
-document.getElementById("inputForm").onsubmit = async (e)=>{
-  e.preventDefault();
-  if(!currentUser) return;
-  const inp = document.getElementById("messageInput");
-  const text = inp.value.trim();
-  if(!text) return;
-  const payload = {
-    sender_id: currentUser.user_id,
-    recipient: (selectedScope==="global" ? "all" : selectedPeer),
-    text
-  };
-  await fetch(SERVER+"/send", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify(payload)
-  });
-  inp.value = "";
-  loadMessages(true);
-};
+    if scope == "global":
+        c.execute("""
+        SELECT m.id, m.sender_id, su.username AS sender_name,
+               m.recipient, NULL AS recipient_name,
+               m.text, m.created_at
+        FROM messages m
+        LEFT JOIN users su ON su.id = m.sender_id
+        WHERE m.recipient = 'all'
+        ORDER BY m.created_at ASC
+        LIMIT ?
+        """, (limit,))
+    elif scope == "dialog":
+        if not user_id or not peer_id:
+            conn.close()
+            return JSONResponse({"error":"Missing user_id/peer_id"}, status_code=400)
+        # 2-сторонний диалог
+        c.execute("""
+        SELECT m.id, m.sender_id, su.username AS sender_name,
+               m.recipient, ru.username AS recipient_name,
+               m.text, m.created_at
+        FROM messages m
+        LEFT JOIN users su ON su.id = m.sender_id
+        LEFT JOIN users ru ON ru.id = m.recipient
+        WHERE (m.sender_id = ? AND m.recipient = ?)
+           OR (m.sender_id = ? AND m.recipient = ?)
+        ORDER BY m.created_at ASC
+        LIMIT ?
+        """, (user_id, peer_id, peer_id, user_id, limit))
+    else:
+        conn.close()
+        return JSONResponse({"error":"Unknown scope"}, status_code=400)
 
-// ---------- Polling ----------
-function startPolling(){
-  stopPolling();
-  pollTimer = setInterval(()=>{
-    loadMessages(false);
-    refreshUsers();
-  }, 1500);
-}
-function stopPolling(){
-  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-}
+    rows = c.fetchall()
+    conn.close()
 
-// ---------- Admin ----------
-async function adminLogin(){
-  const pwd = document.getElementById("adminPwd").value;
-  const r = await fetch(SERVER+"/admin/login",{
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({password: pwd})
-  });
-  const d = await r.json();
-  if(d.error){ alert(d.error); return; }
-  adminPwd = pwd;
-  loadAdmin();
-}
+    return [{
+        "id": r[0],
+        "sender_id": r[1],
+        "sender_name": r[2] or r[1],
+        "recipient": r[3],
+        "recipient_name": r[4],
+        "text": r[5],
+        "created_at": r[6],
+    } for r in rows]
 
-async function loadAdmin(){
-  const r = await fetch(SERVER+"/admin/users?password="+encodeURIComponent(adminPwd));
-  const d = await r.json();
-  if(d.error){ alert(d.error); return; }
-  let html = "<h3>Admin Panel</h3><div class='toolbar'>"+
-             "<button onclick='resetDB()'>Reset DB</button></div><ul>";
-  d.users.forEach(u=>{
-    html += `<li>${u.username} — messages: ${u.messages}</li>`;
-  });
-  html += "</ul>";
-  document.getElementById("adminForm").innerHTML = html;
-}
+# --- Админка ---
+ADMIN_PASSWORD = "admin123"
 
-async function resetDB(){
-  const r = await fetch(SERVER+"/admin/reset",{
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({password: adminPwd})
-  });
-  const d = await r.json();
-  alert(JSON.stringify(d));
-  loadAdmin();
-}
+@app.post("/admin/login")
+async def admin_login(req: Request):
+    data = await req.json()
+    password = data.get("password")
+    if password != ADMIN_PASSWORD:
+        return JSONResponse({"error":"Wrong admin password"}, status_code=403)
+    return {"status":"ok"}
 
-// ---------- Header buttons ----------
-document.getElementById("loginBtn").onclick = showLogin;
-document.getElementById("adminBtn").onclick = showAdmin;
-document.getElementById("logoutBtn").onclick = doLogout;
+@app.get("/admin/users")
+async def admin_users(password: str):
+    if password != ADMIN_PASSWORD:
+        return JSONResponse({"error":"Forbidden"}, status_code=403)
+    conn = db()
+    c = conn.cursor()
+    c.execute("""
+    SELECT u.id, u.username, COUNT(m.id) as msg_count
+    FROM users u
+    LEFT JOIN messages m ON m.sender_id = u.id
+    GROUP BY u.id, u.username
+    ORDER BY u.username
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return {"users":[{"id":r[0], "username":r[1], "messages":r[2]} for r in rows]}
 
-// старт
-showLogin();
-</script>
-</body>
-</html>
+@app.post("/admin/reset")
+async def admin_reset(req: Request):
+    data = await req.json()
+    password = data.get("password")
+    if password != ADMIN_PASSWORD:
+        return JSONResponse({"error":"Wrong admin password"}, status_code=403)
+    conn = db()
+    c = conn.cursor()
+    c.execute("DELETE FROM messages")
+    c.execute("DELETE FROM users")
+    conn.commit()
+    conn.close()
+    return {"status":"reset done"}
