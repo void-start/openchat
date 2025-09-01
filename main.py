@@ -253,20 +253,17 @@ async def admin_reset(req: Request):
     conn.close()
     return {"status":"reset done"}
 
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
+@app.websocket("/ws/call/{user_id}")
+async def call_socket(websocket: WebSocket, user_id: str):
     await websocket.accept()
-    active_connections[user_id] = websocket
+    active_calls[user_id] = websocket
     try:
         while True:
-            data = await websocket.receive_json()
-            # Ожидаем данные вида {"to":"peer_id", "type":"offer/answer/candidate", "data":{...}}
-            peer_id = data.get("to")
-            if peer_id in active_connections:
-                await active_connections[peer_id].send_json({
-                    "from": user_id,
-                    "type": data["type"],
-                    "data": data["data"]
-                })
-    except WebSocketDisconnect:
-        del active_connections[user_id]
+            data = await websocket.receive_text()
+            # пересылка собеседнику
+            msg = json.loads(data)
+            target = msg.get("to")
+            if target in active_calls:
+                await active_calls[target].send_text(data)
+    except:
+        del active_calls[user_id]
