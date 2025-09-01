@@ -1,8 +1,7 @@
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Form
 import sqlite3
 import uuid
 import os
@@ -19,7 +18,7 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 # --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # можно ограничить ["http://localhost:8000"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,12 +31,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # пользователи
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE,
-        password TEXT
+        password_hash TEXT
     )
     """)
     conn.commit()
@@ -54,7 +52,7 @@ def hash_password(password: str) -> str:
 async def root():
     return FileResponse(INDEX_FILE)
 
-
+# --- Регистрация ---
 @app.post("/register")
 async def register(req: Request):
     data = await req.json()
@@ -76,9 +74,7 @@ async def register(req: Request):
     conn.close()
     return {"status":"ok","user_id":user_id,"username":username}
 
-
-
-
+# --- Логин ---
 @app.post("/login")
 async def login(req: Request):
     data = await req.json()
@@ -98,7 +94,21 @@ async def login(req: Request):
 
     return {"status":"ok","user_id":row[0],"username":username}
 
+# --- Сообщения (заглушки) ---
+MESSAGES = []
 
+@app.get("/inbox")
+async def inbox():
+    return MESSAGES
+
+@app.post("/send")
+async def send(req: Request):
+    data = await req.json()
+    recipient = data.get("recipient", "all")
+    text = data.get("text", "")
+    msg = {"sender":"system","recipient":recipient,"text":text}
+    MESSAGES.append(msg)
+    return {"status":"sent"}
 
 # --- Админ вход ---
 ADMIN_PASSWORD = "admin123"
@@ -119,12 +129,11 @@ async def admin_users(password: str):
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT username, password_hash FROM users")
+    c.execute("SELECT username FROM users")
     rows = c.fetchall()
     conn.close()
 
-    return {"users": [{"username": r[0], "password": r[1]} for r in rows]}
-
+    return {"users": [{"username": r[0]} for r in rows]}
 
 # --- Админ сброс ---
 @app.post("/admin/reset")
