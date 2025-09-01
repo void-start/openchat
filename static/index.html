@@ -123,24 +123,16 @@ let selectedPeer = "all";      // "all" | user_id
 let pollTimer = null;
 
 // ---------- UI helpers ----------
-function showForm(id){
-  hideAll();
-  const form = document.getElementById(id);
-  form.classList.remove("hidden");
-  form.style.opacity = 0;
-  setTimeout(()=> form.style.opacity = 1, 10);
-}
-function hideAll(){
-  document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>{
-    e.classList.add("hidden");
-    e.style.opacity = 0;
-  });
-}
+function showLogin(){ hideAll(); document.getElementById("loginForm").classList.remove("hidden"); }
+function showRegister(){ hideAll(); document.getElementById("registerForm").classList.remove("hidden"); }
+function showAdmin(){ hideAll(); document.getElementById("adminForm").classList.remove("hidden"); }
+function hideAll(){ document.querySelectorAll("#loginForm,#registerForm,#adminForm").forEach(e=>e.classList.add("hidden")); }
 function setTopic(text){ document.getElementById("topicBar").textContent = text; }
 function setAuthUI(logged){
   document.getElementById("inputForm").classList.toggle("hidden", !logged);
   document.getElementById("logoutBtn").classList.toggle("hidden", !logged);
 }
+
 function el(tag, cls, text){
   const n = document.createElement(tag);
   if(cls) n.className = cls;
@@ -165,8 +157,6 @@ async function doLogin(){
   await refreshUsers();
   selectGlobal();
   startPolling();
-  // фокус в поле ввода
-  setTimeout(()=> document.getElementById("messageInput").focus(), 100);
 }
 
 async function doRegister(){
@@ -179,7 +169,7 @@ async function doRegister(){
   const d = await r.json();
   if(d.error){ alert(d.error); return; }
   alert("Registered. Now login.");
-  showForm("loginForm");
+  showLogin();
 }
 
 async function doLogout(){
@@ -192,7 +182,7 @@ async function doLogout(){
   document.getElementById("users").innerHTML = "";
   setTopic("🌐 Global chat");
   setAuthUI(false);
-  showForm("loginForm");
+  showLogin();
 }
 
 // ---------- Users ----------
@@ -224,6 +214,7 @@ function markActivePeer(){
   if(selectedPeer==="all"){
     items[0]?.classList.add("active");
   } else {
+    // match by tag text (id)
     items.forEach(i=>{
       const idDiv = i.querySelector(".tag");
       if(idDiv && idDiv.textContent === selectedPeer) i.classList.add("active");
@@ -295,14 +286,6 @@ document.getElementById("inputForm").onsubmit = async (e)=>{
   loadMessages(true);
 };
 
-// Enter / Shift+Enter
-document.getElementById("messageInput").addEventListener("keydown", e=>{
-  if(e.key === "Enter" && !e.shiftKey){
-    e.preventDefault();
-    document.getElementById("inputForm").dispatchEvent(new Event("submit"));
-  }
-});
-
 // ---------- Polling ----------
 function startPolling(){
   stopPolling();
@@ -352,12 +335,12 @@ async function resetDB(){
 }
 
 // ---------- Header buttons ----------
-document.getElementById("loginBtn").onclick = ()=> showForm("loginForm");
-document.getElementById("adminBtn").onclick = ()=> showForm("adminForm");
+document.getElementById("loginBtn").onclick = showLogin;
+document.getElementById("adminBtn").onclick = showAdmin;
 document.getElementById("logoutBtn").onclick = doLogout;
 
 // старт
-showForm("loginForm");
+showLogin();
 </script>
 
 
