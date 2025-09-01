@@ -14,6 +14,8 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
 #inputForm input, #inputForm button { background:black; color:#0f0; border:1px solid #0f0; padding:5px; }
 #loginForm, #registerForm, #adminForm { padding:20px; }
 .hidden { display:none; }
+button { cursor:pointer; }
+#messages div { margin-bottom:4px; }
 </style>
 </head>
 <body>
@@ -33,8 +35,7 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
     <div id="messages"></div>
     <form id="inputForm" class="hidden">
       <input id="messageInput" type="text" placeholder="Type..."/>
-      <input id="fileInput" type="file"/>
-      <button>Send</button>
+      <button type="submit">Send</button>
     </form>
   </div>
 </div>
@@ -44,28 +45,28 @@ body { margin:0; font-family:monospace; background:black; color:#0f0;}
   <h3>Login</h3>
   <input id="loginName" placeholder="Login"><br>
   <input id="loginPass" type="password" placeholder="Password"><br>
-  <button onclick="doLogin()">Login</button>
-  <button onclick="showRegister()">Register</button>
+  <button type="button" onclick="doLogin()">Login</button>
+  <button type="button" onclick="showRegister()">Register</button>
 </div>
 
 <div id="registerForm" class="hidden">
   <h3>Register</h3>
   <input id="regName" placeholder="Login"><br>
   <input id="regPass" type="password" placeholder="Password"><br>
-  <button onclick="doRegister()">Register</button>
-  <button onclick="showLogin()">Back</button>
+  <button type="button" onclick="doRegister()">Register</button>
+  <button type="button" onclick="showLogin()">Back</button>
 </div>
 
 <div id="adminForm" class="hidden">
   <h3>Admin</h3>
   <input id="adminPwd" type="password" placeholder="Password"><br>
-  <button onclick="adminLogin()">Enter</button>
+  <button type="button" onclick="adminLogin()">Enter</button>
 </div>
 
 <script>
 const SERVER = window.location.origin;
 let currentUser = null;
-let selectedUser = null;
+let adminPwd = null;
 
 // UI control
 function showLogin(){ hideAll(); document.getElementById("loginForm").classList.remove("hidden"); }
@@ -95,7 +96,6 @@ async function doLogin(){
   }
 }
 
-
 async function doRegister(){
   const login=document.getElementById("regName").value;
   const pass=document.getElementById("regPass").value;
@@ -105,7 +105,6 @@ async function doRegister(){
 }
 
 async function doLogout(){
-  await fetch(SERVER+"/logout",{method:"POST"});
   currentUser=null;
   document.getElementById("userInfo").textContent="Not logged in";
   document.getElementById("inputForm").classList.add("hidden");
@@ -117,12 +116,13 @@ async function doLogout(){
 async function loadMessages(){
   if(!currentUser) return;
   const r=await fetch(SERVER+"/inbox");
+  if(!r.ok) return;
   const msgs=await r.json();
   const box=document.getElementById("messages");
   box.innerHTML="";
   msgs.forEach(m=>{
     const div=document.createElement("div");
-    div.textContent=(m.sender===currentUser.user_id?"Me":"Other")+": "+m.text;
+    div.textContent=(m.sender===currentUser.user_id?"Me":m.sender)+": "+m.text;
     box.appendChild(div);
   });
   box.scrollTop=box.scrollHeight;
@@ -141,22 +141,22 @@ document.getElementById("inputForm").onsubmit=async e=>{
 // Admin
 async function adminLogin(){
   const pwd=document.getElementById("adminPwd").value;
-  const r=await fetch(SERVER+"/admin_login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
+  const r=await fetch(SERVER+"/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
   const d=await r.json();
-  if(d.error){alert(d.error);}else{ loadAdmin(); }
+  if(d.error){alert(d.error);}else{ adminPwd=pwd; loadAdmin(); }
 }
 
 async function loadAdmin(){
-  const r=await fetch(SERVER+"/admin_panel");
+  const r=await fetch(SERVER+"/admin/users?password="+adminPwd);
   const d=await r.json();
   if(d.error){alert(d.error);return;}
   let html="<h3>Admin Panel</h3><button onclick='resetDB()'>Reset DB</button><ul>";
-  for(const u in d.users){ html+=`<li>${u} / ${d.users[u].password}</li>`; }
+  d.users.forEach(u=>{ html+=`<li>${u.username}</li>`; });
   html+="</ul>";
   document.getElementById("adminForm").innerHTML=html;
 }
 async function resetDB(){
-  const r=await fetch(SERVER+"/admin_reset",{method:"POST"});
+  const r=await fetch(SERVER+"/admin/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:adminPwd})});
   const d=await r.json();
   alert(JSON.stringify(d));
   loadAdmin();
