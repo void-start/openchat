@@ -1,12 +1,12 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Form
 import sqlite3
 import uuid
 import os
 import hashlib
-import bcrypt # Установка: pip install bcrypt
 
 app = FastAPI()
 
@@ -19,7 +19,7 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 # --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # можно ограничить ["http://localhost:8000"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,7 +37,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE,
-        password_hash TEXT NOT NULL
+        password TEXT
     )
     """)
     conn.commit()
@@ -46,46 +46,35 @@ def init_db():
 init_db()
 
 # --- Утилита ---
-# Используем bcrypt для более надежного хеширования
 def hash_password(password: str) -> str:
-    # bcrypt генерирует соль и хеширует пароль
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(password: str, hashed_password: str) -> bool:
-    try:
-        # bcrypt верифицирует пароль с хешем
-        return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
-    except ValueError:
-        return False
+    return hashlib.sha256(password.encode()).hexdigest()
 
 # --- Корень ---
 @app.get("/")
 async def root():
     return FileResponse(INDEX_FILE)
 
-# --- Регистрация ---
+
 @app.post("/register")
 async def register(username: str = Form(...), password: str = Form(...)):
     if not username or not password:
-        return JSONResponse({"error": "Missing fields"}, status_code=400)
+        return JSONResponse({"error":"Missing fields"}, status_code=400)
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     try:
         user_id = str(uuid.uuid4())
-        hashed_password = hash_password(password) # Хешируем пароль
         c.execute("INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)",
-                  (user_id, username, hashed_password))
+                  (user_id, username, hash_password(password)))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
-        return JSONResponse({"error": "Username already exists"}, status_code=400)
-    finally:
-        conn.close()
+        return JSONResponse({"error":"Username already exists"}, status_code=400)
+    conn.close()
+    return {"status":"ok","user_id":user_id,"username":username}
 
-    return {"status": "ok", "user_id": user_id, "username": username}
 
-# --- Вход ---
+
 @app.post("/login")
 async def login(username: str = Form(...), password: str = Form(...)):
     conn = sqlite3.connect(DB_FILE)
@@ -94,43 +83,48 @@ async def login(username: str = Form(...), password: str = Form(...)):
     row = c.fetchone()
     conn.close()
 
-    if not row or not verify_password(password, row[1]): # Верифицируем пароль
-        return JSONResponse({"error": "Invalid username or password"}, status_code=401)
+    if not row:
+        return JSONResponse({"error":"No such user"}, status_code=404)
 
-    return {"status": "ok", "user_id": row[0], "username": username}
+    if row[1] != hash_password(password):
+        return JSONResponse({"error":"Wrong password"}, status_code=403)
+
+    return {"status":"ok","user_id":row[0],"username":username}
+
 
 # --- Админ вход ---
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123") # Безопасное хранение пароля
-ADMIN_PASSWORD_HASH = hash_password(ADMIN_PASSWORD)
+ADMIN_PASSWORD = "admin123"
 
 @app.post("/admin/login")
 async def admin_login(req: Request):
     data = await req.json()
     password = data.get("password")
-    if not password or not verify_password(password, ADMIN_PASSWORD_HASH):
-        return JSONResponse({"error": "Invalid password"}, status_code=401)
+    if password != ADMIN_PASSWORD:
+        return JSONResponse({"error": "Wrong admin password"}, status_code=403)
     return {"status": "ok"}
 
 # --- Админ список пользователей ---
 @app.get("/admin/users")
 async def admin_users(password: str):
-    if not verify_password(password, ADMIN_PASSWORD_HASH):
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    if password != ADMIN_PASSWORD:
+        return JSONResponse({"error":"Forbidden"}, status_code=403)
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT username FROM users") # Не возвращаем хеши
+    c.execute("SELECT username, password_hash FROM users")
     rows = c.fetchall()
     conn.close()
-    return {"users": [{"username": r[0]} for r in rows]}
+
+    return {"users": [{"username": r[0], "password": r[1]} for r in rows]}
+
+
 # --- Админ сброс ---
 @app.post("/admin/reset")
 async def admin_reset(req: Request):
     data = await req.json()
     password = data.get("password")
-    if not password or not verify_password(password, ADMIN_PASSWORD_HASH):
-        return JSONResponse({"error": "Invalid password"}, status_code=401)
-    
+    if password != ADMIN_PASSWORD:
+        return JSONResponse({"error": "Wrong admin password"}, status_code=403)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("DELETE FROM users")
