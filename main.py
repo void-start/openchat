@@ -7,8 +7,13 @@ import uuid
 import os
 import hashlib
 from datetime import datetime
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import Dict
 
 app = FastAPI()
+
+# Активные WebSocket-подключения {user_id: websocket}
+active_connections: Dict[str, WebSocket] = {}
 
 # --- Конфиг ---
 DB_FILE = "db.sqlite"
@@ -247,3 +252,21 @@ async def admin_reset(req: Request):
     conn.commit()
     conn.close()
     return {"status":"reset done"}
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+    active_connections[user_id] = websocket
+    try:
+        while True:
+            data = await websocket.receive_json()
+            # Ожидаем данные вида {"to":"peer_id", "type":"offer/answer/candidate", "data":{...}}
+            peer_id = data.get("to")
+            if peer_id in active_connections:
+                await active_connections[peer_id].send_json({
+                    "from": user_id,
+                    "type": data["type"],
+                    "data": data["data"]
+                })
+    except WebSocketDisconnect:
+        del active_connections[user_id]
