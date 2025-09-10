@@ -264,11 +264,20 @@ async def call_socket(websocket: WebSocket, user_id: str):
     try:
         while True:
             data = await websocket.receive_text()
-            # пересылка собеседнику
             msg = json.loads(data)
             target = msg.get("to")
-            if target in active_calls:
+
+            if target and target in active_calls:
                 msg["from"] = user_id
                 await active_calls[target].send_text(json.dumps(msg))
-    except:
-        del active_calls[user_id]
+            else:
+                # уведомление, что пользователь оффлайн
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": f"User {target} not available"
+                }))
+    except WebSocketDisconnect:
+        print(f"{user_id} disconnected")
+    finally:
+        if user_id in active_calls:
+            del active_calls[user_id]
