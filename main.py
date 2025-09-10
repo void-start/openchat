@@ -13,6 +13,9 @@ import json
 
 app = FastAPI()
 
+# Активные звонки {user_id: websocket}
+active_calls: Dict[str, WebSocket] = {}
+
 # Активные WebSocket-подключения {user_id: websocket}
 active_connections: Dict[str, WebSocket] = {}
 
@@ -265,6 +268,7 @@ async def call_socket(websocket: WebSocket, user_id: str):
             msg = json.loads(data)
             target = msg.get("to")
             if target in active_calls:
-                await active_calls[target].send_text(data)
+                msg["from"] = user_id
+                await active_calls[target].send_text(json.dumps(msg))
     except:
         del active_calls[user_id]

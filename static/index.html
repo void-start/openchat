@@ -371,7 +371,7 @@ let ws = null, pc = null, localStream = null, remoteStream = null, peerId = null
 
 function wsURL(){
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}/ws/${currentUser.user_id}`;
+  return `${proto}://${location.host}/ws/call/${currentUser.user_id}`;
 }
 
 function connectWS(){
