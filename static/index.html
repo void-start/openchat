@@ -151,7 +151,7 @@ function setAuthUI(logged){
   document.getElementById("inputForm").classList.toggle("hidden", !logged);
   document.getElementById("logoutBtn").classList.toggle("hidden", !logged);
   document.getElementById("callBtn").classList.toggle("hidden", !logged);
-  document.getElementById("hangupBtn").classList.toggle("hidden", !logged);
+  // Hangup button is controlled by showVideoUI
   updateCallButtons();
 }
 function updateCallButtons(){
@@ -203,7 +203,7 @@ async function doRegister(){
 async function doLogout(){
   stopPolling();
   disconnectWS();
-  hangup(); // на всякий случай закрыть стримы
+  hangup(); // на всякий случай закрыть стримы и сбросить WebRTC
   currentUser = null;
   selectedScope = "global";
   selectedPeer = "all";
@@ -367,7 +367,19 @@ async function resetDB(){
 }
 
 /* ===================== WebRTC / Calls ===================== */
-let ws = null, pc = null, localStream = null, remoteStream = null, peerId = null;
+let ws = null;
+let peerConnection = null; // Renamed 'pc' to 'peerConnection' for clarity
+let localStream = null;
+let remoteStream = null;
+let currentCallingPeerId = null; // Renamed 'peerId' to 'currentCallingPeerId' to avoid confusion with selectedPeer
+
+const iceServers = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    // You can add more STUN/TURN servers here for better reliability
+    // { urls: 'turn:your.turn.server.com:3478', username: 'user', credential: 'password' }
+  ]
+};
 
 function wsURL(){
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -377,71 +389,198 @@ function wsURL(){
 function connectWS(){
   if(!currentUser || ws) return;
   ws = new WebSocket(wsURL());
+  ws.onopen = () => {
+      console.log("WebSocket connected for calls.");
+  };
   ws.onmessage = async (event)=>{
     const msg = JSON.parse(event.data);
+    console.log("WS message received:", msg); // Debugging
     if(msg.type==="offer"){ await handleOffer(msg); }
-    else if(msg.type==="answer"){ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.data)); }
-    else if(msg.type==="candidate"){ if(pc) await pc.addIceCandidate(new RTCIceCandidate(msg.data)); }
+    else if(msg.type==="answer"){ await handleAnswer(msg); } // New handler for answer
+    else if(msg.type==="candidate"){ await handleIceCandidate(msg); } // New handler for candidate
+    else if(msg.type==="error"){ alert("Call error: " + msg.message); hangup(); }
   };
-  ws.onclose = ()=>{ ws = null; };
+  ws.onclose = ()=>{
+    console.log("WebSocket disconnected for calls.");
+    ws = null;
+  };
+  ws.onerror = (error) => {
+    console.error("WebSocket error:", error);
+  };
 }
 function disconnectWS(){
   if(ws){ try{ ws.close(); }catch(e){} ws=null; }
 }
 
 async function startCall(){
-  if(selectedPeer==="all"){ alert("Select user for call"); return; }
-  peerId = selectedPeer;
+  if(selectedPeer==="all"){ alert("Select a user for the call."); return; }
+  currentCallingPeerId = selectedPeer; // Set the peer we are calling
   await ensurePeerConnection();
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws?.send(JSON.stringify({to:peerId,type:"offer",data:offer}));
-  showVideoUI(true);
+
+  try {
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    ws?.send(JSON.stringify({to:currentCallingPeerId, type:"offer", data:offer}));
+    console.log("Sent offer to", currentCallingPeerId);
+    showVideoUI(true);
+  } catch (err) {
+    console.error("Error creating or sending offer:", err);
+    alert("Failed to start call: " + err);
+    hangup();
+  }
 }
+
 async function handleOffer(msg){
-  peerId = msg.from;
+  // Check if we are already in a call or trying to call someone else
+  if (peerConnection && currentCallingPeerId && currentCallingPeerId !== msg.from) {
+      console.warn("Already in a call or calling someone else, ignoring incoming offer.");
+      // Optionally, send a "busy" message back
+      ws?.send(JSON.stringify({ to: msg.from, type: "error", message: "User busy" }));
+      return;
+  }
+  
+  currentCallingPeerId = msg.from; // The sender of the offer is the peer we are connecting to
   await ensurePeerConnection();
-  await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  ws?.send(JSON.stringify({to:peerId,type:"answer",data:answer}));
-  showVideoUI(true);
+
+  try {
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.data));
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    ws?.send(JSON.stringify({to:currentCallingPeerId, type:"answer", data:answer}));
+    console.log("Sent answer to", currentCallingPeerId);
+    showVideoUI(true);
+  } catch (err) {
+    console.error("Error handling offer or sending answer:", err);
+    alert("Failed to answer call: " + err);
+    hangup();
+  }
+}
+
+async function handleAnswer(msg) {
+  if (!peerConnection) {
+    console.warn("No peer connection to set answer on.");
+    return;
+  }
+  try {
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.data));
+    console.log("Received and set answer from", msg.from);
+  } catch (err) {
+    console.error("Error setting remote description from answer:", err);
+    alert("Failed to process answer: " + err);
+    hangup();
+  }
+}
+
+async function handleIceCandidate(msg) {
+  if (!peerConnection) {
+    console.warn("No peer connection to add ICE candidate to.");
+    return;
+  }
+  try {
+    await peerConnection.addIceCandidate(new RTCIceCandidate(msg.data));
+    console.log("Added ICE candidate from", msg.from);
+  } catch (err) {
+    console.error("Error adding ICE candidate:", err);
+    // This can happen if candidates arrive before remote description is set.
+    // WebRTC usually handles this by queueing, but a warning is good.
+  }
 }
 
 async function ensurePeerConnection(){
-  if(pc) return;
-  pc = new RTCPeerConnection();
-  pc.onicecandidate = e=>{
-    if(e.candidate) ws?.send(JSON.stringify({to:peerId,type:"candidate",data:e.candidate}));
+  if(peerConnection) return; // If peerConnection already exists, do nothing
+
+  peerConnection = new RTCPeerConnection(iceServers); // Pass ICE servers here!
+  console.log("New RTCPeerConnection created.");
+
+  peerConnection.onicecandidate = e => {
+    if (e.candidate) {
+      console.log("Sending ICE candidate:", e.candidate);
+      ws?.send(JSON.stringify({to:currentCallingPeerId, type:"candidate", data:e.candidate}));
+    }
   };
-  // медиа
+
+  // Handle incoming media streams
+  peerConnection.ontrack = e => {
+    console.log("Remote track received:", e.streams);
+    if (e.streams && e.streams[0]) {
+      const remoteVideo = document.getElementById("remoteVideo");
+      // Assign the first stream to the video element
+      if (remoteVideo.srcObject !== e.streams[0]) {
+        remoteVideo.srcObject = e.streams[0];
+        console.log("Remote stream assigned to remoteVideo.");
+      }
+    }
+  };
+
+  // Get local media
   if(!localStream){
     try{
       localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+      console.log("Local media stream obtained.");
     }catch(err){
-      alert("Camera/mic error: " + err);
+      alert("Camera/mic error: " + err + ". Make sure you grant permissions.");
+      console.error("getUserMedia error:", err);
+      hangup(); // Hang up if media access fails
       return;
     }
   }
-  localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
+  localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
   document.getElementById("localVideo").srcObject = localStream;
+  console.log("Local stream assigned to localVideo and tracks added to peerConnection.");
 
-  remoteStream = new MediaStream();
-  pc.ontrack = e=>e.streams[0].getTracks().forEach(t=>remoteStream.addTrack(t));
-  document.getElementById("remoteVideo").srcObject = remoteStream;
+  // Debugging connection state changes
+  peerConnection.oniceconnectionstatechange = () => {
+    console.log('ICE connection state changed:', peerConnection.iceConnectionState);
+    if (peerConnection.iceConnectionState === 'failed' || peerConnection.iceConnectionState === 'closed') {
+        console.warn('ICE connection failed or closed. Attempting hangup.');
+        hangup(); // Automatically hangup on connection failure
+    }
+  };
+  peerConnection.onconnectionstatechange = () => {
+    console.log('Peer connection state changed:', peerConnection.connectionState);
+    if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'closed' || peerConnection.connectionState === 'failed') {
+        console.warn('Peer connection disconnected, closed, or failed. Attempting hangup.');
+        hangup();
+    }
+  };
 }
+
 
 function showVideoUI(visible){
   document.getElementById("videoPanel").classList.toggle("hidden", !visible);
+  // Ensure hangup button is only visible when video panel is
   document.getElementById("hangupBtn").classList.toggle("hidden", !visible);
+  // Call button should be disabled while a call is active (or trying to connect)
+  document.getElementById("callBtn").disabled = visible;
 }
 
 function hangup(){
-  if(pc){ try{ pc.ontrack=null; pc.onicecandidate=null; pc.close(); }catch(e){} pc=null; }
-  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
-  if(remoteStream){ remoteStream.getTracks().forEach(t=>t.stop()); remoteStream=null; }
-  peerId=null;
-  showVideoUI(false);
+  console.log("Hanging up call.");
+  if(peerConnection){
+    try{
+      peerConnection.ontrack = null;
+      peerConnection.onicecandidate = null;
+      peerConnection.oniceconnectionstatechange = null;
+      peerConnection.onconnectionstatechange = null;
+      peerConnection.close();
+      console.log("PeerConnection closed.");
+    }catch(e){ console.error("Error closing peerConnection:", e); }
+    peerConnection = null;
+  }
+  if(localStream){
+    localStream.getTracks().forEach(t => t.stop());
+    document.getElementById("localVideo").srcObject = null;
+    localStream = null;
+    console.log("Local stream stopped.");
+  }
+  // remoteStream doesn't need to be stopped like localStream, just nullified from video element
+  if(document.getElementById("remoteVideo").srcObject){
+    document.getElementById("remoteVideo").srcObject = null;
+  }
+  remoteStream = null; // No need to stop individual tracks if not holding references
+  currentCallingPeerId = null;
+  showVideoUI(false); // Hide the video panel and hangup button
+  updateCallButtons(); // Re-enable call button if eligible
 }
 
 /* ===================== Header buttons ===================== */
