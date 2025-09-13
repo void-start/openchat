@@ -13,11 +13,11 @@ import json
 
 app = FastAPI()
 
-# Активные звонки {user_id: websocket}
+# Активные звонки {user_id: websocket} - This is your signaling server for WebRTC
 active_calls: Dict[str, WebSocket] = {}
 
-# Активные WebSocket-подключения {user_id: websocket}
-active_connections: Dict[str, WebSocket] = {}
+# Active WebSocket connections {user_id: websocket} (Your initial comment, not currently used for general chat in this script)
+# active_connections: Dict[str, WebSocket] = {}
 
 # --- Конфиг ---
 DB_FILE = "db.sqlite"
@@ -260,24 +260,35 @@ async def admin_reset(req: Request):
 @app.websocket("/ws/call/{user_id}")
 async def call_socket(websocket: WebSocket, user_id: str):
     await websocket.accept()
+    print(f"User {user_id} connected to call_socket.")
     active_calls[user_id] = websocket
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
             target = msg.get("to")
+            msg_type = msg.get("type")
+
+            print(f"Received {msg_type} from {user_id} for {target}")
 
             if target and target in active_calls:
+                # Add sender's ID to the message for the recipient
                 msg["from"] = user_id
                 await active_calls[target].send_text(json.dumps(msg))
+                print(f"Forwarded {msg_type} from {user_id} to {target}")
             else:
-                # уведомление, что пользователь оффлайн
+                # Notify sender if target is offline or invalid
+                error_message = f"User {target} not available for call."
+                print(f"Error: {error_message} (from {user_id})")
                 await websocket.send_text(json.dumps({
                     "type": "error",
-                    "message": f"User {target} not available"
+                    "message": error_message
                 }))
     except WebSocketDisconnect:
-        print(f"{user_id} disconnected")
+        print(f"User {user_id} disconnected from call_socket.")
+    except Exception as e:
+        print(f"Error in call_socket for {user_id}: {e}")
     finally:
         if user_id in active_calls:
             del active_calls[user_id]
+            print(f"User {user_id} removed from active_calls.")
